@@ -76,6 +76,6 @@ if(NOT SKIP_CUDA_TESTS)
 endif()
 
 if(NOT SKIP_CUDA_TESTS)
-    install(FILES src/kernels/multibody_solver.cuh
+    install(FILES src/kernels/multibody_solver.cuh src/kernels/macros.cuh
             DESTINATION include)
 endif()
