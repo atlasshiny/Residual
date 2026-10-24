@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Residual — Orbit &amp; KAN Viewer</title>
+    <title>Residual — Orbit, KAN &amp; Cosmos Viewer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -31,6 +31,10 @@
           </div>
         </div>
         <div class="topbar-center">
+          <nav class="mode-tabs" id="mode-tabs" aria-label="Viewer mode">
+            <button class="mode-tab is-active" data-mode="orbit" type="button">Orbit</button>
+            <button class="mode-tab" data-mode="cosmos" type="button">Cosmos job</button>
+          </nav>
           <span class="chip" id="scene-status">Initializing scene…</span>
         </div>
         <div class="topbar-actions">
@@ -51,7 +55,7 @@
       </header>
 
       <aside id="panel">
-        <section class="card" id="trajectory-card">
+        <section class="card" id="trajectory-card" data-mode-panel="orbit">
           <div class="card-head">
             <h2>Trajectory</h2>
             <span class="status-dot" id="traj-dot"></span>
@@ -60,7 +64,7 @@
           <dl class="kv" id="traj-kv"></dl>
         </section>
 
-        <section class="card" id="kan-card">
+        <section class="card" id="kan-card" data-mode-panel="orbit">
           <div class="card-head">
             <h2>KAN result</h2>
             <span class="status-dot" id="kan-dot"></span>
@@ -82,6 +86,40 @@
             <pre id="kan-raw"></pre>
           </details>
         </section>
+
+        <section class="card" id="cosmos-card" data-mode-panel="cosmos">
+          <div class="card-head">
+            <h2>Cosmos job</h2>
+            <span class="status-dot" id="cosmos-dot"></span>
+          </div>
+          <div class="btn-row">
+            <button id="load-job-btn" class="btn primary" type="button">Open folder…</button>
+            <button id="load-demo-btn" class="btn ghost" type="button">Load demo job</button>
+            <input
+              type="file"
+              id="job-dir-input"
+              webkitdirectory
+              directory
+              multiple
+              class="file-input"
+              aria-label="Select a Cosmos job directory"
+            />
+          </div>
+          <p id="cosmos-status" class="status-text">No job loaded — open a job directory.</p>
+          <dl class="kv" id="cosmos-kv"></dl>
+
+          <h3 class="subhead">Frame</h3>
+          <div class="frame-info" id="cosmos-frame-info">
+            <p class="frame-empty" id="frame-empty-note">Scrub a frame to inspect its pose.</p>
+            <dl class="kv frame-meta" id="cosmos-frame-meta"></dl>
+            <code id="cosmos-pose-matrix" class="pose-matrix">—</code>
+          </div>
+
+          <details class="raw-json">
+            <summary>manifest.json</summary>
+            <pre id="cosmos-manifest-raw"></pre>
+          </details>
+        </section>
       </aside>
 
       <main id="viewport">
@@ -90,6 +128,27 @@
           <p>Loading scene &amp; data…</p>
         </div>
         <div id="error-banner" class="error-banner" hidden></div>
+
+        <div id="frame-render" class="frame-render is-hidden">
+          <img id="frame-img" alt="Rendered frame" draggable="false" />
+          <span class="frame-render-label" id="frame-render-label"></span>
+        </div>
+
+        <div id="scrubber" class="scrubber is-hidden" role="region" aria-label="Frame scrubber">
+          <button id="play-btn" class="play-btn" type="button" aria-label="Play frames">▶</button>
+          <div class="scrub-body">
+            <div class="scrub-labels">
+              <span id="frame-label" class="frame-label">frame — / —</span>
+              <span id="time-label" class="time-label">t = — s</span>
+            </div>
+            <div class="scrub-track">
+              <span class="scrub-progress" id="scrub-progress"></span>
+              <span class="scrub-thumb" id="scrub-thumb"></span>
+              <label class="visually-hidden" for="frame-slider">Frame number</label>
+              <input type="range" id="frame-slider" min="0" max="0" value="0" step="1" />
+            </div>
+          </div>
+        </div>
       </main>
 
       <footer id="metrics-strip">

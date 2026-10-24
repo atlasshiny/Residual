@@ -1,0 +1,30 @@
+{
+  "job_id": "demo_flyby",
+  "mode": "inverse_dynamics",
+  "artifacts": [
+    {
+      "name": "poses",
+      "path": "sample_outputs.json",
+      "kind": "pose_json",
+      "bytes": 20437
+    }
+  ],
+  "created_at_s": 1792831103,
+  "metadata": {
+    "mock": true,
+    "worker": "scripts/mock_cosmos_worker.py",
+    "seed": 0,
+    "model": "Cosmos3-Nano",
+    "fps": 24,
+    "frames": 96,
+    "pose_count": 95,
+    "action_source": "synthetic",
+    "scale_k_km_per_m": 1000.0,
+    "pointing_law": "earth",
+    "window": {
+      "t0_tdb": 1000.0,
+      "t1_tdb": 1003.958333,
+      "time_compression": 1.0
+    }
+  }
+}
