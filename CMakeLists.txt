@@ -68,9 +68,14 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
     endif()
 endif()
 
-install(TARGETS multibody_solver
-        ARCHIVE DESTINATION lib
-        LIBRARY DESTINATION lib
-        RUNTIME DESTINATION bin)
-install(FILES src/kernels/multibody_solver.cuh
-        DESTINATION include)
+if(NOT SKIP_CUDA_TESTS)
+    install(TARGETS multibody_solver
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib
+            RUNTIME DESTINATION bin)
+endif()
+
+if(NOT SKIP_CUDA_TESTS)
+    install(FILES src/kernels/multibody_solver.cuh
+            DESTINATION include)
+endif()
