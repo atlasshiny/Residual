@@ -40,7 +40,7 @@ impl IntoSteps for isize {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Vec3 {
     pub x: f64,
     pub y: f64,
@@ -133,7 +133,13 @@ pub struct State {
     pub v: Vec3,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Burn {
+    pub t: f64,
+    pub dv: Vec3,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub dt: f64,
     pub epoch: f64,
@@ -146,6 +152,7 @@ pub struct Config {
     pub moon_phase: f64,
     pub softening: f64,
     pub perturbation: i32,
+    pub burns: Vec<Burn>,
 }
 
 impl Default for Config {
@@ -162,6 +169,7 @@ impl Default for Config {
             moon_phase: 0.0,
             softening: 0.0,
             perturbation: 0,
+            burns: Vec::new(),
         }
     }
 }
@@ -265,6 +273,12 @@ pub fn propagate(state: State, steps: impl IntoSteps, dt: f64, config: &Config) 
     let mut t = config.epoch;
     out.push(s);
     for _ in 0..steps {
+        // Apply impulsive burns firing at this step's start time.
+        for burn in &config.burns {
+            if (t - burn.t).abs() < 0.5 * dt {
+                s.v = s.v.add(burn.dv);
+            }
+        }
         let a0 = acceleration(s.r, config, t);
         s.v = s.v.add(a0.scale(0.5 * dt));
         s.r = s.r.add(s.v.scale(dt));

@@ -30,6 +30,14 @@ __global__ void multibody_kernel(MbsState* states, int num_bodies, int num_steps
         }
 
         for (int step = 0; step < num_steps; ++step) {
+            // Apply impulsive burns firing at this step's start time.
+            for (int b = 0; b < config.num_burns && b < 8; ++b) {
+                if (std::fabs(t - config.burns[b].t) < 0.5 * config.dt) {
+                    state.v.x += config.burns[b].dvx;
+                    state.v.y += config.burns[b].dvy;
+                    state.v.z += config.burns[b].dvz;
+                }
+            }
             mbs::velocity_verlet_step(state, t, config.dt, config);
             t = config.epoch + static_cast<double>(step + 1) * config.dt;
 
@@ -106,7 +114,21 @@ bool valid_config(const MbsConfig* config) {
     if (!std::isfinite(config->softening) || config->softening < 0.0) {
         return false;
     }
-    return config->perturbation == 0 || config->perturbation == 1;
+    if (!(config->perturbation == 0 || config->perturbation == 1)) {
+        return false;
+    }
+    if (config->num_burns < 0 || config->num_burns > 8) {
+        return false;
+    }
+    for (int i = 0; i < config->num_burns; ++i) {
+        if (!std::isfinite(config->burns[i].t) ||
+            !std::isfinite(config->burns[i].dvx) ||
+            !std::isfinite(config->burns[i].dvy) ||
+            !std::isfinite(config->burns[i].dvz)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -129,6 +151,7 @@ void mbs_default_config(MbsConfig* config) {
     config->moon_phase = 0.0;
     config->softening = 0.0;
     config->perturbation = 0;
+    config->num_burns = 0;
 }
 
 // Host orchestration: validate, size buffers, upload, launch, download.

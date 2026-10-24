@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (mut config, mission) = match args.get(3) {
         Some(path) => {
             let mission = Mission::load(path)?;
-            (Config::from(mission.solver), Some(mission))
+            (Config::from(mission.solver.clone()), Some(mission))
         }
         None => (Config::default(), None),
     };

@@ -26,7 +26,7 @@ use dynamics::Config as DynConfig;
 ///
 /// Field names intentionally match the CUDA `MbsConfig` layout so the same
 /// JSON can be handed to either implementation.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SolverConfig {
     pub dt: f64,
@@ -40,6 +40,8 @@ pub struct SolverConfig {
     pub moon_phase: f64,
     pub softening: f64,
     pub perturbation: i32,
+    #[serde(default)]
+    pub burns: Vec<dynamics::Burn>,
 }
 
 impl Default for SolverConfig {
@@ -62,6 +64,7 @@ impl From<DynConfig> for SolverConfig {
             moon_phase: c.moon_phase,
             softening: c.softening,
             perturbation: c.perturbation,
+            burns: c.burns.clone(),
         }
     }
 }
@@ -80,6 +83,7 @@ impl From<SolverConfig> for DynConfig {
             moon_phase: c.moon_phase,
             softening: c.softening,
             perturbation: c.perturbation,
+            burns: c.burns.clone(),
         }
     }
 }
@@ -283,7 +287,7 @@ mod tests {
     #[test]
     fn solver_config_round_trips() {
         let dyn_cfg = DynConfig::default();
-        let serde_cfg = SolverConfig::from(dyn_cfg);
+        let serde_cfg = SolverConfig::from(dyn_cfg.clone());
         let back: DynConfig = serde_cfg.into();
         assert_eq!(dyn_cfg, back);
     }

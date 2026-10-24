@@ -30,6 +30,14 @@ struct MbsState {
     MbsVec3 v;  // velocity (m/s)
 };
 
+// An impulsive burn: instantaneous delta-V applied to every particle at time t.
+struct MbsBurn {
+    double t;    // seconds (absolute, in the same time frame as epoch)
+    double dvx;  // m/s
+    double dvy;  // m/s
+    double dvz;  // m/s
+};
+
 // Simulation parameters. Fill this with mbs_default_config() and override
 // only the fields that need to change.
 struct MbsConfig {
@@ -44,6 +52,9 @@ struct MbsConfig {
     double moon_phase;      // radians at t = 0
     double softening;       // metres; 0 gives the exact point-mass terms (default)
     int perturbation;       // 0 = none, 1 = Earth J2
+    // Impulsive burns: instantaneous delta-V applied to every particle.
+    int num_burns;          // number of valid entries in burns[]
+    MbsBurn burns[8];       // cap of 8 burns per propagation
 };
 
 namespace mbs {
