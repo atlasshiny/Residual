@@ -1,4 +1,4 @@
-"""Held-out (time-window) evaluation and burn masking for the KAN pipeline."""
+"""Held-out (time-window) evaluation and burn masking for the PINN/SINDy pipeline."""
 
 import json
 import math

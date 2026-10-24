@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from ml.kan import KAN, KANLayer, PolynomialFit, export_results, mse, r2_score, train
+from ml.pinn import PINN, SINDyLayer, PolynomialFit, export_results, mse, r2_score, train
 from ml.kan.kan import _bspline_basis, _bspline_knots, _solve_linear
 
 
@@ -30,7 +30,7 @@ def test_bspline_endpoints_finite():
 
 
 def test_kan_forward_shape_and_scaler():
-    kan = KAN([3, 4, 2], num_basis=5, degree=2, standardize=True)
+    pinn = PINN([3, 4, 2], activation='tanh', dropout=0.2, regularization=1e-5)
     X = [[float(i), float(i + 1), float(i - 1)] for i in range(10)]
     out = kan.forward(X)
     assert len(out) == 10
@@ -46,7 +46,7 @@ def test_kan_training_reduces_loss():
     random.seed(7)
     X = [[random.uniform(-1.0, 1.0), random.uniform(-1.0, 1.0)] for _ in range(80)]
     Y = [[x[0] * x[0] + 0.5 * x[1]] for x in X]
-    kan = KAN([2, 3, 1], num_basis=6, degree=3, grid_range=(-2.0, 2.0),
+    sindy = SINDy([2, 3, 1], library=['polynomial', 'trig'], threshold=0.1, alpha=0.01)
               standardize=True, l1=0.0)
     before = mse(kan.forward(X), Y)
     train(kan, X, Y, epochs=30, lr=1e-1, verbose=False)
@@ -64,7 +64,7 @@ def test_symbolic_edge_returns_polynomial_fit():
     random.seed(1)
     X = [[random.uniform(-1.0, 1.0), random.uniform(-1.0, 1.0)] for _ in range(50)]
     Y = [[x[0] ** 2] for x in X]
-    kan = KAN([2, 1], num_basis=6, degree=3, standardize=True)
+    pinn = PINN([2, 1], activation='relu', dropout=0.3, regularization=1e-4)
     train(kan, X, Y, epochs=20, lr=1e-1, verbose=False)
     fit = kan.symbolic_edge(0, 0, 0, samples=32, poly_degree=3)
     assert isinstance(fit, PolynomialFit)
