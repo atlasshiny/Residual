@@ -15,14 +15,21 @@ from ml.validation.horizons import (
 def lib():
     try:
         return load_library()
-    except FileNotFoundError:
-        pytest.skip("CUDA shared library not built")
+    except (FileNotFoundError, RuntimeError) as e:
+        if "skipped in CI" in str(e) or "not built" in str(e):
+            pytest.skip(f"CUDA shared library not available: {e}")
+        raise
 
 
 def test_make_synthetic_reference_shape():
-    df = make_synthetic_reference(steps=10, dt=60.0)
-    assert len(df) == 11
-    assert {"t", "x", "y", "z", "vx", "vy", "vz"}.issubset(df.columns)
+    try:
+        df = make_synthetic_reference(steps=10, dt=60.0)
+        assert len(df) == 11
+        assert {"t", "x", "y", "z", "vx", "vy", "vz"}.issubset(df.columns)
+    except RuntimeError as e:
+        if "skipped in CI" in str(e):
+            pytest.skip("Skipping CUDA-dependent synthetic reference generation in CI")
+        raise
 
 
 def test_compare_identical_trajectory(lib):
@@ -41,9 +48,14 @@ def test_compare_detects_perturbation(lib):
 
 
 def test_load_reference_csv(tmp_path):
-    df = make_synthetic_reference(steps=5, dt=60.0)
-    path = tmp_path / "ref.csv"
-    df.to_csv(path, index=False)
-    loaded = load_reference(path)
-    assert len(loaded) == 6
-    assert list(loaded.columns)[:2] == ["t", "x"]
+    try:
+        df = make_synthetic_reference(steps=5, dt=60.0)
+        path = tmp_path / "ref.csv"
+        df.to_csv(path, index=False)
+        loaded = load_reference(path)
+        assert len(loaded) == 6
+        assert list(loaded.columns)[:2] == ["t", "x"]
+    except RuntimeError as e:
+        if "skipped in CI" in str(e):
+            pytest.skip("Skipping CUDA-dependent synthetic reference generation in CI")
+        raise
