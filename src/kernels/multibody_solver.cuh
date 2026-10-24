@@ -52,6 +52,11 @@ struct MbsConfig {
     double moon_phase;      // radians at t = 0
     double softening;       // metres; 0 gives the exact point-mass terms (default)
     int perturbation;       // 0 = none, 1 = Earth J2
+    // Earth spin axis (unit vector) used by the J2 term. Default (0,0,1)
+    // assumes an equatorial frame; set for the lunar-orbit frame.
+    double spin_axis_x;
+    double spin_axis_y;
+    double spin_axis_z;
     // Impulsive burns: instantaneous delta-V applied to every particle.
     int num_burns;          // number of valid entries in burns[]
     MbsBurn burns[8];       // cap of 8 burns per propagation
@@ -126,10 +131,9 @@ MBS_DEVICE_INLINE void earth_moon_positions(double t, const MbsConfig& config, M
 }
 
 // J2 acceleration relative to the Earth's centre (d = r - r_E).
-// NOTE: z is treated as the Earth spin axis and the ephemeris plane is
-// assumed equatorial. Horizons-derived states use the lunar-orbit frame
-// (convert_reference.py), whose +z is ~23 deg off the spin axis, so
-// perturbation=1 is only physically correct in a spin-aligned frame.
+// The spin axis is taken from config.spin_axis (unit vector), so this
+// works in any frame. For Horizons-derived (lunar-orbit) data the caller
+// must set spin_axis to the Earth spin direction in that frame.
 MBS_DEVICE_INLINE MbsVec3 earth_j2_acceleration(const MbsVec3& d, const MbsConfig& config) {
     const double r2 = dot(d, d);
     if (r2 <= 0.0) {
@@ -140,14 +144,23 @@ MBS_DEVICE_INLINE MbsVec3 earth_j2_acceleration(const MbsVec3& d, const MbsConfi
     if (r <= config.earth_radius) {
         return {};  // J2 is only valid outside the body.
     }
-    const double z2_over_r2 = (d.z * d.z) / r2;
 
-    // -3/2 * J2 * mu * R^2 / r^5
-    const double k = -1.5 * config.j2 * config.mu_earth * config.earth_radius * config.earth_radius / (r2 * r2 * r);
-    const double xy_factor = 1.0 - 5.0 * z2_over_r2;
-    const double z_factor = 3.0 - 5.0 * z2_over_r2;
+    // General J2 about an arbitrary unit spin axis s.
+    const double sdotr = d.x * config.spin_axis_x +
+                         d.y * config.spin_axis_y +
+                         d.z * config.spin_axis_z;
+    const double cos2 = (sdotr * sdotr) / r2;
 
-    return {k * xy_factor * d.x, k * xy_factor * d.y, k * z_factor * d.z};
+    const double k = -1.5 * config.j2 * config.mu_earth *
+                     config.earth_radius * config.earth_radius /
+                     (r2 * r2 * r);
+    const double factor = 1.0 - 5.0 * cos2;
+
+    MbsVec3 a{};
+    a.x = k * (factor * d.x + 2.0 * sdotr * config.spin_axis_x);
+    a.y = k * (factor * d.y + 2.0 * sdotr * config.spin_axis_y);
+    a.z = k * (factor * d.z + 2.0 * sdotr * config.spin_axis_z);
+    return a;
 }
 
 // Sum of the Earth and Moon point-mass terms plus the optional perturbation.

@@ -152,6 +152,7 @@ pub struct Config {
     pub moon_phase: f64,
     pub softening: f64,
     pub perturbation: i32,
+    pub spin_axis: Vec3,
     pub burns: Vec<Burn>,
 }
 
@@ -169,6 +170,7 @@ impl Default for Config {
             moon_phase: 0.0,
             softening: 0.0,
             perturbation: 0,
+            spin_axis: Vec3::new(0.0, 0.0, 1.0),
             burns: Vec::new(),
         }
     }
@@ -233,12 +235,17 @@ pub fn earth_j2_acceleration(d: Vec3, config: &Config) -> Vec3 {
     if r <= config.earth_radius {
         return Vec3::ZERO;
     }
-    let z2_over_r2 = (d.z * d.z) / r2;
+    let s = config.spin_axis;
+    let sdotr = d.x * s.x + d.y * s.y + d.z * s.z;
+    let cos2 = (sdotr * sdotr) / r2;
     let k = -1.5 * config.j2 * config.mu_earth * config.earth_radius * config.earth_radius
         / (r2 * r2 * r);
-    let xy_factor = 1.0 - 5.0 * z2_over_r2;
-    let z_factor = 3.0 - 5.0 * z2_over_r2;
-    Vec3::new(k * xy_factor * d.x, k * xy_factor * d.y, k * z_factor * d.z)
+    let factor = 1.0 - 5.0 * cos2;
+    Vec3::new(
+        k * (factor * d.x + 2.0 * sdotr * s.x),
+        k * (factor * d.y + 2.0 * sdotr * s.y),
+        k * (factor * d.z + 2.0 * sdotr * s.z),
+    )
 }
 
 /// Acceleration with Earth/Moon point masses and optional J2.

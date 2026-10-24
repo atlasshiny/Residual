@@ -40,8 +40,14 @@ pub struct SolverConfig {
     pub moon_phase: f64,
     pub softening: f64,
     pub perturbation: i32,
+    #[serde(default = "default_spin_axis")]
+    pub spin_axis: (f64, f64, f64),
     #[serde(default)]
     pub burns: Vec<dynamics::Burn>,
+}
+
+fn default_spin_axis() -> (f64, f64, f64) {
+    (0.0, 0.0, 1.0)
 }
 
 impl Default for SolverConfig {
@@ -64,6 +70,7 @@ impl From<DynConfig> for SolverConfig {
             moon_phase: c.moon_phase,
             softening: c.softening,
             perturbation: c.perturbation,
+            spin_axis: (c.spin_axis.x, c.spin_axis.y, c.spin_axis.z),
             burns: c.burns.clone(),
         }
     }
@@ -83,6 +90,7 @@ impl From<SolverConfig> for DynConfig {
             moon_phase: c.moon_phase,
             softening: c.softening,
             perturbation: c.perturbation,
+            spin_axis: dynamics::Vec3::new(c.spin_axis.0, c.spin_axis.1, c.spin_axis.2),
             burns: c.burns.clone(),
         }
     }

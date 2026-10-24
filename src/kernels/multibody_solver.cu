@@ -120,6 +120,11 @@ bool valid_config(const MbsConfig* config) {
     if (config->num_burns < 0 || config->num_burns > 8) {
         return false;
     }
+    if (!std::isfinite(config->spin_axis_x) ||
+        !std::isfinite(config->spin_axis_y) ||
+        !std::isfinite(config->spin_axis_z)) {
+        return false;
+    }
     for (int i = 0; i < config->num_burns; ++i) {
         if (!std::isfinite(config->burns[i].t) ||
             !std::isfinite(config->burns[i].dvx) ||
@@ -152,6 +157,9 @@ void mbs_default_config(MbsConfig* config) {
     config->softening = 0.0;
     config->perturbation = 0;
     config->num_burns = 0;
+    config->spin_axis_x = 0.0;
+    config->spin_axis_y = 0.0;
+    config->spin_axis_z = 1.0;
 }
 
 // Host orchestration: validate, size buffers, upload, launch, download.
