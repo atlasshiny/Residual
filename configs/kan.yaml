@@ -1,0 +1,7 @@
+data: data/residual_table.csv
+time_col: t
+engineer: true
+test_fraction: 0.2
+epochs: 50
+lr: 0.2
+out: ml/kan/kan_result.json
