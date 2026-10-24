@@ -63,6 +63,7 @@ test-cpu:
 bench:
 	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 	cmake --build $(BUILD_DIR) -j --target multibody_bench
+	mkdir -p results
 	$(BUILD_DIR)/benchmarks/multibody_bench $(BENCH_ARGS)
 
 # Full validation including the CUDA kernel and comparison tests.

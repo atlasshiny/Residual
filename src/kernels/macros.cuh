@@ -20,8 +20,10 @@
 #endif
 
 // Ceiling division: number of blocks needed to cover `count` elements.
+// `count` must be a non-negative int; the result is clamped to the CUDA grid
+// limit.  Evaluates `count` once.
 #define MBS_BLOCKS_FOR(count) \
-    (((count) + MBS_THREADS_PER_BLOCK - 1) / MBS_THREADS_PER_BLOCK)
+    ((count) > 0 ? ((count) + MBS_THREADS_PER_BLOCK - 1) / MBS_THREADS_PER_BLOCK : 0)
 
 // ---------------------------------------------------------------------------
 // Attributes
@@ -38,6 +40,9 @@
 // ---------------------------------------------------------------------------
 
 // Check a CUDA call in a function that returns an int cudaError_t value.
+// (The macro hard-codes `return static_cast<int>(...)`; only use it in
+// functions whose return type is `int` and whose failure mode is "propagate
+// the cudaError_t".  For other return types use MBS_CUDA_CHECK_RETURN.)
 #define MBS_CUDA_CHECK(call)                                     \
     do {                                                         \
         const cudaError_t mbs_status_ = (call);                  \

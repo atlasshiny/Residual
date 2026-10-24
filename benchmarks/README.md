@@ -65,6 +65,11 @@ Counters written by the harness:
 
 - Google Benchmark is used for iteration control and reporting, but timing is
   manual (`UseManualTime` + `SetIterationTime`), sourced from CUDA events.
+- `BM_PropagateApi` brackets the *entire* `mbs_propagate` call, which includes
+  `cudaMalloc`/`cudaFree` and blocking `cudaMemcpy`; the GPU is idle during
+  those host-side steps, so `gpu_ms_per_call` for that series is wall time
+  inside the API call, not pure GPU busy time. Use `BM_PropagateKernel` for
+  compute throughput.
 - `BM_PropagateApi` includes `cudaMalloc`/`cudaFree` on every call. For small
   batches the allocator dominates — that is real API cost. Use
   `BM_PropagateKernel` for pure compute throughput.

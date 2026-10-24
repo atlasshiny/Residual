@@ -104,15 +104,19 @@ class GpuTimer {
 
     bool ok() const { return ok_; }
 
-    void begin() { cudaEventRecord(start_); }
+    cudaError_t begin() { return cudaEventRecord(start_); }
 
     // Records the stop event, waits for it, and returns elapsed milliseconds.
-    float end_ms() {
-        cudaEventRecord(stop_);
-        cudaEventSynchronize(stop_);
+    // Returns cudaSuccess on success; *ms is set only on success.
+    cudaError_t end_ms(float* ms_out) {
+        cudaError_t rc = cudaEventRecord(stop_);
+        if (rc != cudaSuccess) return rc;
+        rc = cudaEventSynchronize(stop_);
+        if (rc != cudaSuccess) return rc;
         float ms = 0.0f;
-        cudaEventElapsedTime(&ms, start_, stop_);
-        return ms;
+        rc = cudaEventElapsedTime(&ms, start_, stop_);
+        if (rc == cudaSuccess && ms_out != nullptr) *ms_out = ms;
+        return rc;
     }
 
  private:
@@ -291,9 +295,22 @@ void time_workload(benchmark::State& state, Workload workload, bool reset_before
         return;
     }
 
-    // Warm-up: one full call plus synchronisation, untimed.
-    MBS_CUDA_CHECK_OR_SKIP(state, workload.run(), "warm-up call failed");
-    MBS_CUDA_CHECK_OR_SKIP(state, cudaDeviceSynchronize(), "warm-up synchronisation failed");
+    // Warm-up: run until ~50 ms of GPU time has elapsed so clocks ramp up
+    // and the first (cold) sample is not folded into the reported average.
+    {
+        GpuTimer w;
+        if (!w.ok()) { state.SkipWithError("cudaEventCreate failed"); return; }
+        float acc = 0.0f;
+        while (acc < 50.0f) {
+            MBS_CUDA_CHECK_OR_SKIP(state, w.begin(), "warm-up record failed");
+            MBS_CUDA_CHECK_OR_SKIP(state, workload.run(), "warm-up call failed");
+            float ms = 0.0f;
+            MBS_CUDA_CHECK_OR_SKIP(state, w.end_ms(&ms), "warm-up elapsed failed");
+            MBS_CUDA_CHECK_OR_SKIP(state, cudaDeviceSynchronize(), "warm-up sync failed");
+            acc += ms;
+            if (acc == 0.0f) break;  // avoid infinite loop on zero-time stubs
+        }
+    }
 
     GpuTimer timer;
     if (!timer.ok()) {
@@ -306,9 +323,10 @@ void time_workload(benchmark::State& state, Workload workload, bool reset_before
         if (reset_before_call) {
             if (workload.reset() != cudaSuccess) { state.SkipWithError("device reset failed"); return; }
         }
-        timer.begin();
+        MBS_CUDA_CHECK_OR_SKIP(state, timer.begin(), "event record failed");
         const int rc = workload.run();
-        const float ms = timer.end_ms();
+        float ms = 0.0f;
+        MBS_CUDA_CHECK_OR_SKIP(state, timer.end_ms(&ms), "event elapsed failed");
         MBS_CUDA_CHECK_OR_SKIP(state, rc, "mbs_propagate launch failed");
         MBS_CUDA_LAST_ERROR_OR_SKIP(state, "kernel execution failed");
         state.SetIterationTime(static_cast<double>(ms) / 1.0e3);
@@ -360,10 +378,11 @@ void BM_HostToDevice(benchmark::State& state) {
 
     double total_ms = 0.0;
     for (auto _ : state) {
-        timer.begin();
+        MBS_CUDA_CHECK_OR_SKIP(state, timer.begin(), "event record failed");
         const cudaError_t rc =
             cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice);
-        const float ms = timer.end_ms();
+        float ms = 0.0f;
+        MBS_CUDA_CHECK_OR_SKIP(state, timer.end_ms(&ms), "event elapsed failed");
         if (rc != cudaSuccess) {
             cleanup();
             state.SkipWithError("cudaMemcpy H2D failed");
