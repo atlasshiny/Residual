@@ -1,0 +1,8 @@
+[package]
+name = "frames"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "frames"
+path = "src/lib.rs"

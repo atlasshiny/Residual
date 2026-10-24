@@ -1,0 +1,11 @@
+[package]
+name = "residual"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dynamics = { path = "../dynamics" }
+
+[lib]
+name = "residual"
+path = "src/lib.rs"

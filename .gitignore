@@ -7,3 +7,5 @@ ml/kan/kan_result.json
 tauri-src/src-tauri/target/
 tauri-src/node_modules/
 tauri-src/src-tauri/gen/
+
+target/

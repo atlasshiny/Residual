@@ -18,6 +18,7 @@ python:
 test: cuda python
 	uv run pytest -q
 	@if [ -f build/CTestTestfile.cmake ]; then ctest --test-dir build --output-on-failure; else echo "No CTest file found, skipping C++ tests."; fi
+	@if [ -f Cargo.toml ]; then cargo test; fi
 
 clean:
 	rm -rf build .venv
