@@ -32,7 +32,12 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y build-essential cmake
+          apt-get install -y build-essential wget
+      - name: Install modern CMake
+        run: |
+          CMAKE_VERSION=3.28.3
+          wget -q https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-linux-x86_64.tar.gz
+          tar -xzf cmake-$CMAKE_VERSION-linux-x86_64.tar.gz -C /usr/local --strip-components=1
       - name: Configure CMake
         run: |
           cmake -B build -DBUILD_TESTING=ON -DCMAKE_CUDA_ARCHITECTURES=75 -DSKIP_CUDA_TESTS=OFF
