@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from ml.kan.baselines import (
+from ml.pinn.baselines import (
     MLP,
     _poly_features,
     mse,

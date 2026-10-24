@@ -2,7 +2,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from ml.kan.dataset import build_xy, load_residual_table, split_xy
+from ml.pinn.dataset import build_xy, load_residual_table, split_xy
 
 
 def test_build_xy_shapes():

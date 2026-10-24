@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "kan"))
-    from features import engineer_features
+    from ml.pinn.features import engineer_features
 
 
 def _df():
