@@ -1,8 +1,10 @@
 """Baselines required by ARCHITECTURE.md: a plain MLP and a SINDy-style
-sparse regression.  Pure Python, no dependencies."""
+sparse regression.  Uses numpy for fast vectorized training."""
 
 import random
 from itertools import combinations_with_replacement
+
+import numpy as np
 
 __all__ = [
     "MLP",
@@ -27,81 +29,82 @@ def mse(pred, target):
 
 
 class MLP:
-    def __init__(self, dims):
+    """Small fully-connected MLP trained with full-batch gradient descent.
+
+    All weights/biases are stored as numpy arrays for speed.  ``forward``
+    accepts lists of lists and returns a list of lists, keeping the same
+    interface as the original pure-Python version.
+    """
+
+    def __init__(self, dims, seed: int = 0):
         self.dims = dims
         self.W = []
         self.b = []
+        rng = np.random.default_rng(seed)
         for i in range(len(dims) - 1):
-            w = [[random.uniform(-0.1, 0.1) for _ in range(dims[i + 1])]
-                 for _ in range(dims[i])]
-            b = [0.0 for _ in range(dims[i + 1])]
+            fan_in = dims[i]
+            scale = np.sqrt(2.0 / fan_in)  # He init for ReLU
+            w = rng.normal(0.0, scale, size=(dims[i], dims[i + 1]))
+            b = np.zeros(dims[i + 1])
             self.W.append(w)
             self.b.append(b)
         self._cache = None
 
+    # ------------------------------------------------------------------
+    # forward / backward / update
+    # ------------------------------------------------------------------
     def forward(self, X):
+        X = np.asarray(X, dtype=np.float64)
         acts = [X]
-        for li in range(len(self.W)):
+        n_layers = len(self.W)
+        for li in range(n_layers):
             prev = acts[-1]
-            n = len(prev)
-            out = [[0.0 for _ in range(self.dims[li + 1])] for _ in range(n)]
-            for ni in range(n):
-                for j in range(self.dims[li + 1]):
-                    s = self.b[li][j]
-                    for i in range(self.dims[li]):
-                        s += self.W[li][i][j] * prev[ni][i]
-                    if li < len(self.W) - 1:
-                        s = s if s > 0 else 0.0  # ReLU
-                    out[ni][j] = s
-            acts.append(out)
+            z = prev @ self.W[li] + self.b[li]
+            if li < n_layers - 1:
+                z = np.maximum(z, 0.0)  # ReLU
+            acts.append(z)
         self._cache = acts
-        return acts[-1]
+        return acts[-1].tolist()
 
     def backward(self, dY):
         acts = self._cache
         L = len(self.W)
+        dY = np.asarray(dY, dtype=np.float64)
         grads_W = [None] * L
         grads_b = [None] * L
         dA = dY
         for li in range(L - 1, -1, -1):
             prev = acts[li]
-            n = len(prev)
-            dW = [[0.0 for _ in range(self.dims[li + 1])] for _ in range(self.dims[li])]
-            db = [0.0 for _ in range(self.dims[li + 1])]
-            dprev = [[0.0 for _ in range(self.dims[li])] for _ in range(n)]
-            for ni in range(n):
-                for j in range(self.dims[li + 1]):
-                    # derivative of ReLU for hidden layers
-                    if li < L - 1 and acts[li + 1][ni][j] <= 0:
-                        continue
-                    dy = dY[ni][j] if li == L - 1 else dA[ni][j]
-                    db[j] += dy
-                    for i in range(self.dims[li]):
-                        dW[i][j] += dy * prev[ni][i]
-                        dprev[ni][i] += dy * self.W[li][i][j]
-            grads_W[li] = dW
-            grads_b[li] = db
-            dA = dprev
+            n = prev.shape[0]
+            if li == L - 1:
+                dZ = dA  # output layer: no activation derivative
+            else:
+                a = acts[li + 1]
+                dZ = dA * (a > 0)  # ReLU derivative
+            grads_W[li] = prev.T @ dZ  # dY already carries 1/(n*m)
+            grads_b[li] = dZ.sum(axis=0)
+            if li > 0:
+                dA = dZ @ self.W[li].T
         self._grads = (grads_W, grads_b)
 
     def update(self, lr):
         grads_W, grads_b = self._grads
         for li in range(len(self.W)):
-            for i in range(self.dims[li]):
-                for j in range(self.dims[li + 1]):
-                    self.W[li][i][j] -= lr * grads_W[li][i][j]
-            for j in range(self.dims[li + 1]):
-                self.b[li][j] -= lr * grads_b[li][j]
+            self.W[li] -= lr * grads_W[li]
+            self.b[li] -= lr * grads_b[li]
 
     def train(self, X, Y, epochs=200, lr=1e-2, verbose=True):
-        n = len(X)
-        m = len(Y[0])
+        X = np.asarray(X, dtype=np.float64)
+        Y = np.asarray(Y, dtype=np.float64)
+        n = X.shape[0]
+        m = Y.shape[1]
         for epoch in range(1, epochs + 1):
             pred = self.forward(X)
-            loss = mse(pred, Y)
-            # d(mean squared error)/d(pred) = 2 * (pred - target) / (n * m)
-            dY = [[2.0 * (pred[i][j] - Y[i][j]) / (n * m)
-                   for j in range(m)] for i in range(n)]
+            pred_arr = np.asarray(pred, dtype=np.float64)
+            diff = pred_arr - Y
+            loss = float((diff * diff).sum() / (n * m))
+            # d(MSE)/d(pred) = 2 * (pred - target) / (n * m)
+            dY = (2.0 * diff / (n * m)).tolist()
             self.backward(dY)
             self.update(lr)
             if verbose and (epoch == 1 or epoch % 20 == 0 or epoch == epochs):

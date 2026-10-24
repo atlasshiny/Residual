@@ -236,8 +236,8 @@ def run(args) -> tuple:
     x_std_mlp = [s if s > 1e-12 else 1.0 for s in x_std_mlp]
     X_train_mlp = [[(row[k] - x_mean_mlp[k]) / x_std_mlp[k] for k in range(n_features)] for row in X_train]
     X_test_mlp = [[(row[k] - x_mean_mlp[k]) / x_std_mlp[k] for k in range(n_features)] for row in X_test]
-    mlp = MLP([n_features, 16, 8, out_dim])
-    mlp.train(X_train_mlp, Y_train, epochs=epochs, lr=5e-2, verbose=False)
+    mlp = MLP([n_features, 16, 8, out_dim], seed=0)
+    mlp.train(X_train_mlp, Y_train, epochs=200, lr=1e-2, verbose=False)
     mlp_train_mse, mlp_train_r2 = _eval(mlp, X_train_mlp, Y_train)
     mlp_test_mse, mlp_test_r2 = _eval(mlp, X_test_mlp, Y_test)
 
