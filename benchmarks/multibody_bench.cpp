@@ -276,10 +276,8 @@ void time_workload(benchmark::State& state, Workload workload, bool reset_before
     }
 
     // Warm-up: one full call plus synchronisation, untimed.
-    if (workload.run() != 0 || cudaDeviceSynchronize() != cudaSuccess) {
-        state.SkipWithError("warm-up call failed");
-        return;
-    }
+    MBS_CUDA_CHECK_OR_SKIP(state, workload.run(), "warm-up call failed");
+    MBS_CUDA_CHECK_OR_SKIP(state, cudaDeviceSynchronize(), "warm-up synchronisation failed");
 
     GpuTimer timer;
     if (!timer.ok()) {
@@ -289,17 +287,14 @@ void time_workload(benchmark::State& state, Workload workload, bool reset_before
 
     double total_ms = 0.0;
     for (auto _ : state) {
-        if (reset_before_call && workload.reset() != cudaSuccess) {
-            state.SkipWithError("device reset failed");
-            return;
+        if (reset_before_call) {
+            MBS_CUDA_CHECK_OR_SKIP(state, workload.reset(), "device reset failed");
         }
         timer.begin();
         const int rc = workload.run();
         const float ms = timer.end_ms();
-        if (rc != 0) {
-            state.SkipWithError("mbs_propagate failed");
-            return;
-        }
+        MBS_CUDA_CHECK_OR_SKIP(state, rc, "mbs_propagate launch failed");
+        MBS_CUDA_LAST_ERROR_OR_SKIP(state, "kernel execution failed");
         state.SetIterationTime(static_cast<double>(ms) / 1.0e3);
         total_ms += static_cast<double>(ms);
     }
@@ -323,18 +318,11 @@ void BM_HostToDevice(benchmark::State& state) {
     const std::size_t bytes = host.size() * sizeof(MbsState);
 
     MbsState* device = nullptr;
-    if (cudaMalloc(reinterpret_cast<void**>(&device), bytes) != cudaSuccess) {
-        state.SkipWithError("cudaMalloc failed");
-        return;
-    }
+    MBS_CUDA_CHECK_OR_SKIP(state, cudaMalloc(reinterpret_cast<void**>(&device), bytes), "cudaMalloc failed");
 
     // Warm-up copy, untimed.
-    if (cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess ||
-        cudaDeviceSynchronize() != cudaSuccess) {
-        cudaFree(device);
-        state.SkipWithError("warm-up copy failed");
-        return;
-    }
+    MBS_CUDA_CHECK_OR_SKIP(state, cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice), "warm-up copy failed");
+    MBS_CUDA_CHECK_OR_SKIP(state, cudaDeviceSynchronize(), "warm-up synchronisation failed");
 
     GpuTimer timer;
     if (!timer.ok()) {
@@ -349,11 +337,7 @@ void BM_HostToDevice(benchmark::State& state) {
         const cudaError_t rc =
             cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice);
         const float ms = timer.end_ms();
-        if (rc != cudaSuccess) {
-            cudaFree(device);
-            state.SkipWithError("cudaMemcpy H2D failed");
-            return;
-        }
+        MBS_CUDA_CHECK_OR_SKIP(state, rc, "cudaMemcpy H2D failed");
         state.SetIterationTime(static_cast<double>(ms) / 1.0e3);
         total_ms += static_cast<double>(ms);
     }

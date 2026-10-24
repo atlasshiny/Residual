@@ -10,7 +10,8 @@
 // a_perturbation currently supports Earth's J2 oblateness term (0 = off).
 #pragma once
 
-#include <cuda_runtime.h>
+#include "macros.cuh"
+
 #include <cmath>
 
 // Public data layout. These are plain C-compatible structs so callers can
@@ -58,33 +59,33 @@ constexpr double kEarthMoonDistance = 3.844e8;    // m
 constexpr double kMoonPeriod = 2.3605915e6;       // s (27.321661 days)
 
 // Small vector helpers used by the device physics below.
-__device__ __forceinline__ MbsVec3 operator+(const MbsVec3& a, const MbsVec3& b) {
+MBS_DEVICE_INLINE MbsVec3 operator+(const MbsVec3& a, const MbsVec3& b) {
     return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
-__device__ __forceinline__ MbsVec3 operator-(const MbsVec3& a, const MbsVec3& b) {
+MBS_DEVICE_INLINE MbsVec3 operator-(const MbsVec3& a, const MbsVec3& b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
 
-__device__ __forceinline__ MbsVec3 operator*(const MbsVec3& a, double s) {
+MBS_DEVICE_INLINE MbsVec3 operator*(const MbsVec3& a, double s) {
     return {a.x * s, a.y * s, a.z * s};
 }
 
-__device__ __forceinline__ MbsVec3& operator+=(MbsVec3& a, const MbsVec3& b) {
+MBS_DEVICE_INLINE MbsVec3& operator+=(MbsVec3& a, const MbsVec3& b) {
     a.x += b.x;
     a.y += b.y;
     a.z += b.z;
     return a;
 }
 
-__device__ __forceinline__ double dot(const MbsVec3& a, const MbsVec3& b) {
+MBS_DEVICE_INLINE double dot(const MbsVec3& a, const MbsVec3& b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
 // Circular barycentric ephemeris. Both bodies orbit the origin with the
 // Moon's angular rate; positions are in the inertial xy plane. Weighting by
 // gravitational parameters instead of masses keeps the barycentre exact.
-__device__ __forceinline__ void earth_moon_positions(double t, const MbsConfig& config, MbsVec3& earth, MbsVec3& moon) {
+MBS_DEVICE_INLINE void earth_moon_positions(double t, const MbsConfig& config, MbsVec3& earth, MbsVec3& moon) {
     if (config.moon_distance <= 0.0) {
         earth = {};
         moon = {};
@@ -115,7 +116,7 @@ __device__ __forceinline__ void earth_moon_positions(double t, const MbsConfig& 
 
 // J2 acceleration relative to the Earth's centre (d = r - r_E).
 // z is the Earth spin axis; the ephemeris plane is equatorial in this model.
-__device__ __forceinline__ MbsVec3 earth_j2_acceleration(const MbsVec3& d, const MbsConfig& config) {
+MBS_DEVICE_INLINE MbsVec3 earth_j2_acceleration(const MbsVec3& d, const MbsConfig& config) {
     const double r2 = dot(d, d);
     if (r2 <= 0.0) {
         return {};
@@ -138,7 +139,7 @@ __device__ __forceinline__ MbsVec3 earth_j2_acceleration(const MbsVec3& d, const
 // Sum of the Earth and Moon point-mass terms plus the optional perturbation.
 // Softening replaces |d|^3 with (|d|^2 + eps^2)^(3/2) to keep close
 // encounters finite.
-__device__ __forceinline__ MbsVec3 acceleration(const MbsVec3& r, const MbsConfig& config, double t) {
+MBS_DEVICE_INLINE MbsVec3 acceleration(const MbsVec3& r, const MbsConfig& config, double t) {
     MbsVec3 earth{};
     MbsVec3 moon{};
     earth_moon_positions(t, config, earth, moon);
@@ -166,7 +167,7 @@ __device__ __forceinline__ MbsVec3 acceleration(const MbsVec3& r, const MbsConfi
 
 // One kick-drift-kick velocity-Verlet step: half kick, drift, re-evaluate
 // acceleration, second half kick. Symplectic for the conservative terms.
-__device__ __forceinline__ void velocity_verlet_step(MbsState& state, double t, double dt, const MbsConfig& config) {
+MBS_DEVICE_INLINE void velocity_verlet_step(MbsState& state, double t, double dt, const MbsConfig& config) {
     const MbsVec3 a0 = acceleration(state.r, config, t);
     state.v += a0 * (0.5 * dt);
     state.r += state.v * dt;

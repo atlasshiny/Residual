@@ -145,45 +145,33 @@ int mbs_propagate(const MbsState* initial_states, int num_bodies, int num_steps,
     const std::size_t state_bytes = bodies * sizeof(MbsState);
 
     DeviceArray<MbsState> device_states;
-    cudaError_t error = device_states.allocate(bodies);
-    if (error != cudaSuccess) {
-        return static_cast<int>(error);
-    }
+    MBS_CUDA_CHECK(device_states.allocate(bodies));
 
     DeviceArray<MbsState> device_trajectory;
     if (trajectory != nullptr) {
-        error = device_trajectory.allocate(trajectory_states);
-        if (error != cudaSuccess) {
-            return static_cast<int>(error);
-        }
+        MBS_CUDA_CHECK(device_trajectory.allocate(trajectory_states));
     }
 
     // Upload the initial states before the kernel starts.
-    error = cudaMemcpy(device_states.data, initial_states, state_bytes, cudaMemcpyHostToDevice);
-    if (error != cudaSuccess) {
-        return static_cast<int>(error);
-    }
+    MBS_CUDA_CHECK(cudaMemcpy(device_states.data, initial_states, state_bytes, cudaMemcpyHostToDevice));
 
     // One thread per particle; the grid-stride loop covers larger batches.
-    constexpr int kThreads = 256;
-    const int blocks = (num_bodies - 1) / kThreads + 1;
+    const int blocks = MBS_BLOCKS_FOR(num_bodies);
 
-    multibody_kernel<<<blocks, kThreads>>>(device_states.data, num_bodies, num_steps, *config, trajectory != nullptr ? device_trajectory.data : nullptr);
+    multibody_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states.data, num_bodies, num_steps, *config, trajectory != nullptr ? device_trajectory.data : nullptr);
 
     // Surface launch errors before attempting the device-to-host copies.
-    error = cudaGetLastError();
-    if (error == cudaSuccess && final_states != nullptr) {
-        error = cudaMemcpy(final_states, device_states.data, state_bytes, cudaMemcpyDeviceToHost);
+    MBS_CUDA_CHECK(cudaGetLastError());
+    if (final_states != nullptr) {
+        MBS_CUDA_CHECK(cudaMemcpy(final_states, device_states.data, state_bytes, cudaMemcpyDeviceToHost));
     }
-    if (error == cudaSuccess && trajectory != nullptr) {
-        error = cudaMemcpy(trajectory, device_trajectory.data, trajectory_states * sizeof(MbsState), cudaMemcpyDeviceToHost);
+    if (trajectory != nullptr) {
+        MBS_CUDA_CHECK(cudaMemcpy(trajectory, device_trajectory.data, trajectory_states * sizeof(MbsState), cudaMemcpyDeviceToHost));
     }
-    if (error == cudaSuccess) {
-        // Also catches asynchronous kernel failures.
-        error = cudaDeviceSynchronize();
-    }
+    // Also catches asynchronous kernel failures.
+    MBS_CUDA_CHECK(cudaDeviceSynchronize());
 
-    return static_cast<int>(error);
+    return static_cast<int>(cudaSuccess);
 }
 
 // Kernel-only path: no allocation, no copies, no synchronisation.  The
@@ -195,14 +183,14 @@ int mbs_propagate_device(MbsState* device_states, int num_bodies, int num_steps,
     }
 
     // One thread per particle; the grid-stride loop covers larger batches.
-    constexpr int kThreads = 256;
-    const int blocks = (num_bodies - 1) / kThreads + 1;
+    const int blocks = MBS_BLOCKS_FOR(num_bodies);
 
-    multibody_kernel<<<blocks, kThreads>>>(device_states, num_bodies, num_steps, *config, device_trajectory);
+    multibody_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states, num_bodies, num_steps, *config, device_trajectory);
 
     // Launch errors surface synchronously; kernel faults surface at the next
     // synchronisation (the benchmark records a stop event immediately after).
-    return static_cast<int>(cudaGetLastError());
+    MBS_CUDA_CHECK(cudaGetLastError());
+    return static_cast<int>(cudaSuccess);
 }
 
 }  // extern "C"
