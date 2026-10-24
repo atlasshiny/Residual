@@ -82,7 +82,13 @@ def load_residual_table(path: Any):
             return pd.read_parquet(path)
     if suffix in (".csv", ".tsv"):
         sep = "\t" if suffix == ".tsv" else ","
-        return pd.read_csv(path, sep=sep)
+        df = pd.read_csv(path, sep=sep)
+        # Residual tables store dr/dv as large integers that overflow int64;
+        # coerce every column to a numeric (float) dtype so targets are not
+        # silently dropped by the numeric-column filter.
+        for c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
     # Fall back: try parquet, then CSV.
     try:
         _import_pyarrow()
@@ -101,7 +107,8 @@ def _default_target_cols(df, feature_cols):
     for name in known:
         if name in df.columns:
             return [name]
-    numeric = [c for c in df.columns if _is_numeric(df[c])]
+    time_col = resolve_time_column(df, None)
+    numeric = [c for c in df.columns if _is_numeric(df[c]) and c != time_col]
     if feature_cols is not None:
         candidates = [c for c in numeric if c not in feature_cols]
         if not candidates:
@@ -121,7 +128,8 @@ def _default_feature_cols(df, target_cols):
     if xcols:
         xcols = sorted(xcols, key=lambda c: int(str(c)[1:]))
         return xcols
-    numeric = [c for c in df.columns if _is_numeric(df[c])]
+    time_col = resolve_time_column(df, None)
+    numeric = [c for c in df.columns if _is_numeric(df[c]) and c != time_col]
     if target_cols is not None:
         return [c for c in numeric if c not in target_cols]
     if len(numeric) > 1:

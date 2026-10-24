@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 try:  # package import
-    from .baselines import MLP, sindy, sindy_predict
+    from .baselines import MLP, linear_predict, linear_regression, sindy, sindy_predict
     from .dataset import (
         _default_target_cols as _infer_target_cols,
         build_xy,
@@ -22,7 +22,7 @@ try:  # package import
     from .kan import KAN, export_results, mse, r2_score, train
 except ImportError:  # script execution
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from baselines import MLP, sindy, sindy_predict
+    from baselines import MLP, linear_predict, linear_regression, sindy, sindy_predict
     from dataset import (
         _default_target_cols as _infer_target_cols,
         build_xy,
@@ -169,19 +169,6 @@ def run(args) -> tuple:
         times = [float(i) for i in range(len(X))]
         time_source = "index"
 
-    # Standardise targets to O(1) scale so the KAN/MLP/SINDy losses stay
-    # finite on residual tables whose magnitudes vary by many orders.
-    if X and Y:
-        n_t = len(Y[0])
-        y_mean = [sum(row[k] for row in Y) / len(Y) for k in range(n_t)]
-        y_std = [0.0] * n_t
-        for row in Y:
-            for k in range(n_t):
-                y_std[k] += (row[k] - y_mean[k]) ** 2
-        y_std = [math.sqrt(v / len(Y)) if v > 0.0 else 1.0 for v in y_std]
-        y_std = [s if s > 1e-12 else 1.0 for s in y_std]
-        Y = [[(row[k] - y_mean[k]) / y_std[k] for k in range(n_t)] for row in Y]
-
     n_samples_raw = len(X)
     masked_fraction = 0.0
     masked_samples = 0
@@ -206,12 +193,13 @@ def run(args) -> tuple:
             f"test={len(X_test)})"
         )
 
+
     n_features = len(X_train[0])
     out_dim = len(Y_train[0])
     hidden = max(4, n_features)
 
     epochs = int(getattr(args, "epochs", 150))
-    lr = float(getattr(args, "lr", 2e-1))
+    lr = float(getattr(args, "lr", 5e-2))
 
     # --- KAN ---
     kan = KAN([n_features, hidden, out_dim], num_basis=8, degree=3,
@@ -238,11 +226,20 @@ def run(args) -> tuple:
                 "rmse": fit.rmse,
             })
 
-    # --- MLP ---
+    # --- MLP (standardise inputs on train stats) ---
+    x_mean_mlp = [sum(row[k] for row in X_train) / len(X_train) for k in range(n_features)]
+    x_var_mlp = [0.0] * n_features
+    for row in X_train:
+        for k in range(n_features):
+            x_var_mlp[k] += (row[k] - x_mean_mlp[k]) ** 2
+    x_std_mlp = [math.sqrt(v / len(X_train)) if v > 0.0 else 1.0 for v in x_var_mlp]
+    x_std_mlp = [s if s > 1e-12 else 1.0 for s in x_std_mlp]
+    X_train_mlp = [[(row[k] - x_mean_mlp[k]) / x_std_mlp[k] for k in range(n_features)] for row in X_train]
+    X_test_mlp = [[(row[k] - x_mean_mlp[k]) / x_std_mlp[k] for k in range(n_features)] for row in X_test]
     mlp = MLP([n_features, 16, 8, out_dim])
-    mlp.train(X_train, Y_train, epochs=epochs, lr=5e-1, verbose=False)
-    mlp_train_mse, mlp_train_r2 = _eval(mlp, X_train, Y_train)
-    mlp_test_mse, mlp_test_r2 = _eval(mlp, X_test, Y_test)
+    mlp.train(X_train_mlp, Y_train, epochs=epochs, lr=5e-2, verbose=False)
+    mlp_train_mse, mlp_train_r2 = _eval(mlp, X_train_mlp, Y_train)
+    mlp_test_mse, mlp_test_r2 = _eval(mlp, X_test_mlp, Y_test)
 
     # --- SINDy (fit on train, evaluate on both) ---
     sindy_degree = 2
@@ -254,6 +251,18 @@ def run(args) -> tuple:
     sindy_test_mse, sindy_test_r2 = _eval(
         None, X_test, Y_test, predict=sindy_predict_fn
     )
+
+    # --- Linear regression baseline ---
+    W_lr = linear_regression(X_train, Y_train)
+    lr_predict_fn = lambda batch: linear_predict(batch, W_lr)
+    lr_train_mse, lr_train_r2 = _eval(None, X_train, Y_train, predict=lr_predict_fn)
+    lr_test_mse, lr_test_r2 = _eval(None, X_test, Y_test, predict=lr_predict_fn)
+
+    # --- Train-mean baseline ---
+    y_mean_train = [sum(row[k] for row in Y_train) / len(Y_train) for k in range(len(Y_train[0]))]
+    mean_predict_fn = lambda batch: [[y_mean_train[k] for k in range(len(y_mean_train))] for _ in batch]
+    mean_train_mse, mean_train_r2 = _eval(None, X_train, Y_train, predict=mean_predict_fn)
+    mean_test_mse, mean_test_r2 = _eval(None, X_test, Y_test, predict=mean_predict_fn)
 
     results = {
         "n_samples": len(X),
@@ -306,6 +315,18 @@ def run(args) -> tuple:
             "test_mse": sindy_test_mse,
             "test_r2": sindy_test_r2,
         },
+        "linear_regression": {
+            "train_mse": lr_train_mse,
+            "train_r2": lr_train_r2,
+            "test_mse": lr_test_mse,
+            "test_r2": lr_test_r2,
+        },
+        "train_mean": {
+            "train_mse": mean_train_mse,
+            "train_r2": mean_train_r2,
+            "test_mse": mean_test_mse,
+            "test_r2": mean_test_r2,
+        },
     }
 
     out_path = getattr(args, "out", None) or "ml/kan/kan_result.json"
@@ -323,6 +344,10 @@ def run(args) -> tuple:
     print(f"SINDy train mse={sindy_train_mse:.6e} r2={sindy_train_r2:.6f} | "
           f"test mse={sindy_test_mse:.6e} r2={sindy_test_r2:.6f} "
           f"expr={exprs[0] if exprs else ''}")
+    print(f"LinReg train mse={lr_train_mse:.6e} r2={lr_train_r2:.6f} | "
+          f"test mse={lr_test_mse:.6e} r2={lr_test_r2:.6f}")
+    print(f"Mean   train mse={mean_train_mse:.6e} r2={mean_train_r2:.6f} | "
+          f"test mse={mean_test_mse:.6e} r2={mean_test_r2:.6f}")
     print(f"wrote {out_path}")
     return results, str(out_path)
 

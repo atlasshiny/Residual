@@ -30,7 +30,7 @@ class PipelineConfig(BaseModel):
     time_col: Optional[str] = None
     test_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
     epochs: int = Field(default=150, ge=1)
-    lr: float = Field(default=2e-1, gt=0.0)
+    lr: float = Field(default=5e-2, gt=0.0)
     engineer: bool = False
     out: str = "ml/kan/kan_result.json"
 

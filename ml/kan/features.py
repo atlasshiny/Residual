@@ -14,7 +14,14 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from .dataset import _import_pandas, resolve_time_column
+try:
+    from .dataset import _import_pandas, resolve_time_column
+except ImportError:  # script execution
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from dataset import _import_pandas, resolve_time_column
 
 __all__ = [
     "FEATURE_COLUMNS",

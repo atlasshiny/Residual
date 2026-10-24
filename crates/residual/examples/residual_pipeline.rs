@@ -42,6 +42,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         None => (Config::default(), None),
     };
     config.epoch = start_time;
+    // For Moon residuals, the particle IS the Moon, so it should not
+    // be attracted by the Moon's own gravity.
+    config.mu_moon = 0.0;
 
     // Prefer the mission cadence; otherwise match the reference spacing.
     let dt = match &mission {

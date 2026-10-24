@@ -250,3 +250,65 @@ def sindy(X, Y, threshold=0.05, degree=2):
 
     expressions = [_format_expression(Xi[j], names) for j in range(out_dim)]
     return Xi, names, expressions
+
+
+def linear_regression(X, Y):
+    """Ordinary least squares: returns (weights, bias) for single-output Y.
+
+    Supports multi-output by fitting each output independently. Returns a
+    predict function via ``linear_predict``.
+    """
+    n = len(X)
+    d = len(X[0])
+    m = len(Y[0])
+    # Add bias column.
+    # Solve (X^T X + ridge) w = X^T y per output.
+    # Use normal equations with small ridge for stability.
+    ridge = 1e-8
+    # Build Gram matrix (d+1) x (d+1).
+    G = [[0.0] * (d + 1) for _ in range(d + 1)]
+    B = [[0.0] * m for _ in range(d + 1)]
+    for i in range(n):
+        row = [1.0] + list(X[i])
+        for a in range(d + 1):
+            for b in range(d + 1):
+                G[a][b] += row[a] * row[b]
+            for k in range(m):
+                B[a][k] += row[a] * Y[i][k]
+    for a in range(d + 1):
+        G[a][a] += ridge
+    # Gaussian elimination.
+    # Augment.
+    A = [G[a][:] + [B[a][k] for k in range(m)] for a in range(d + 1)]
+    # Solve for each k.
+    # Eliminate.
+    for col in range(d + 1):
+        # pivot
+        piv = max(range(col, d + 1), key=lambda r: abs(A[r][col]))
+        A[col], A[piv] = A[piv], A[col]
+        pv = A[col][col]
+        if abs(pv) < 1e-30:
+            pv = 1e-30
+        for j in range(col, d + 1 + m):
+            A[col][j] /= pv
+        for r in range(d + 1):
+            if r == col:
+                continue
+            factor = A[r][col]
+            for j in range(col, d + 1 + m):
+                A[r][j] -= factor * A[col][j]
+    # weights: A[a][d+1+k]
+    W = [[A[a][d + 1 + k] for k in range(m)] for a in range(d + 1)]
+    # W[0] is bias, W[1:] are feature weights.
+    return W
+
+
+def linear_predict(X, W):
+    out = []
+    for row in X:
+        pred = [W[0][k] for k in range(len(W[0]))]
+        for i in range(len(row)):
+            for k in range(len(W[0])):
+                pred[k] += W[i + 1][k] * row[i]
+        out.append(pred)
+    return out
