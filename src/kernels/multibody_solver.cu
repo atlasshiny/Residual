@@ -81,6 +81,7 @@ bool valid_config(const MbsConfig* config) {
     }
     if (!std::isfinite(config->moon_distance) ||
         config->moon_distance < 0.0 ||
+        (config->moon_distance > 0.0 && config->moon_distance < config->earth_radius) ||
         !std::isfinite(config->moon_period) ||
         config->moon_period < 0.0 ||
         !std::isfinite(config->moon_phase)) {

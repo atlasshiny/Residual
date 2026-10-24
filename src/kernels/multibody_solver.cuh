@@ -40,7 +40,7 @@ struct MbsConfig {
     double earth_radius;    // equatorial radius, metres
     double j2;              // Earth J2 coefficient, dimensionless
     double moon_distance;   // Earth-Moon separation, metres
-    double moon_period;     // 0 pins the Moon in place
+    double moon_period;     // reserved (unused by circular ephemeris)
     double moon_phase;      // radians at t = 0
     double softening;       // metres; 0 gives the exact point-mass terms (default)
     int perturbation;       // 0 = none, 1 = Earth J2
@@ -115,7 +115,10 @@ MBS_DEVICE_INLINE void earth_moon_positions(double t, const MbsConfig& config, M
 }
 
 // J2 acceleration relative to the Earth's centre (d = r - r_E).
-// z is the Earth spin axis; the ephemeris plane is equatorial in this model.
+// NOTE: z is treated as the Earth spin axis and the ephemeris plane is
+// assumed equatorial. Horizons-derived states use the lunar-orbit frame
+// (convert_reference.py), whose +z is ~23 deg off the spin axis, so
+// perturbation=1 is only physically correct in a spin-aligned frame.
 MBS_DEVICE_INLINE MbsVec3 earth_j2_acceleration(const MbsVec3& d, const MbsConfig& config) {
     const double r2 = dot(d, d);
     if (r2 <= 0.0) {
@@ -152,10 +155,10 @@ MBS_DEVICE_INLINE MbsVec3 acceleration(const MbsVec3& r, const MbsConfig& config
     const double r_moon2 = dot(d_moon, d_moon) + eps2;
 
     MbsVec3 a{};
-    if (config.mu_earth > 0.0) {
+    if (config.mu_earth > 0.0 && r_earth2 > 0.0) {
         a += d_earth * (-config.mu_earth / (r_earth2 * sqrt(r_earth2)));
     }
-    if (config.mu_moon > 0.0 && config.moon_distance > 0.0) {
+    if (config.mu_moon > 0.0 && config.moon_distance > 0.0 && r_moon2 > 0.0) {
         a += d_moon * (-config.mu_moon / (r_moon2 * sqrt(r_moon2)));
     }
     if (config.perturbation == 1) {
