@@ -169,7 +169,7 @@ int mbs_propagate(const MbsState* initial_states, int num_bodies, int num_steps,
         MBS_CUDA_CHECK(cudaMemcpy(trajectory, device_trajectory.data, trajectory_states * sizeof(MbsState), cudaMemcpyDeviceToHost));
     }
     // Also catches asynchronous kernel failures.
-    MBS_CUDA_CHECK(cudaDeviceSynchronize());
+    MBS_CUDA_CHECK(cudaStreamSynchronize(0));
 
     return static_cast<int>(cudaSuccess);
 }
@@ -185,12 +185,10 @@ int mbs_propagate_device(MbsState* device_states, int num_bodies, int num_steps,
     // One thread per particle; the grid-stride loop covers larger batches.
     const int blocks = MBS_BLOCKS_FOR(num_bodies);
 
+    // Drop any sticky error left by the caller so it is not attributed here.
+    cudaGetLastError();
     multibody_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states, num_bodies, num_steps, *config, device_trajectory);
-
-    // Launch errors surface synchronously; kernel faults surface at the next
-    // synchronisation (the benchmark records a stop event immediately after).
-    MBS_CUDA_CHECK(cudaGetLastError());
-    return static_cast<int>(cudaSuccess);
+    return static_cast<int>(cudaGetLastError());
 }
 
 }  // extern "C"

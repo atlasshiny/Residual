@@ -39,7 +39,21 @@ namespace {
 // Circular orbit around the Earth with a small spread in radius so the batch
 // is not perfectly degenerate.  Values stay well outside the Earth and well
 // inside the Moon's orbit.
-MbsState initial_state_for(int index) {
+// Earth position at t=0 for a given Moon distance (barycentric frame).
+// With moon_distance <= 0 both bodies sit at the origin (Earth-only mode).
+MbsVec3 earth_position_at_epoch(double moon_distance) {
+    if (moon_distance <= 0.0) {
+        return {};
+    }
+    constexpr double kMuEarth = 3.986004418e14;
+    constexpr double kMuMoon = 4.9048695e12;
+    const double scale = moon_distance * kMuMoon / (kMuEarth + kMuMoon);
+    MbsVec3 earth{};
+    earth.x = -scale;
+    return earth;
+}
+
+MbsState initial_state_for(int index, double moon_distance) {
     constexpr double kTwoPi = 6.283185307179586476925286766559;
     constexpr double kMuEarth = 3.986004418e14;
 
@@ -47,9 +61,11 @@ MbsState initial_state_for(int index) {
     const double angle = kTwoPi * static_cast<double>(index % 360) / 360.0;
     const double speed = std::sqrt(kMuEarth / radius);
 
+    const MbsVec3 earth = earth_position_at_epoch(moon_distance);
+
     MbsState state{};
-    state.r.x = radius * std::cos(angle);
-    state.r.y = radius * std::sin(angle);
+    state.r.x = earth.x + radius * std::cos(angle);
+    state.r.y = earth.y + radius * std::sin(angle);
     state.r.z = 0.0;
     state.v.x = -speed * std::sin(angle);
     state.v.y = speed * std::cos(angle);
@@ -57,10 +73,10 @@ MbsState initial_state_for(int index) {
     return state;
 }
 
-std::vector<MbsState> initial_states(int bodies) {
+std::vector<MbsState> initial_states(int bodies, double moon_distance) {
     std::vector<MbsState> states(static_cast<std::size_t>(bodies));
     for (int i = 0; i < bodies; ++i) {
-        states[static_cast<std::size_t>(i)] = initial_state_for(i);
+        states[static_cast<std::size_t>(i)] = initial_state_for(i, moon_distance);
     }
     return states;
 }
@@ -136,7 +152,7 @@ struct HostWorkload {
     bool write_trajectory = false;
 
     HostWorkload(int body_count, int step_count, bool with_trajectory, int perturbation, double moon_distance)
-        : initial(initial_states(body_count)),
+        : initial(initial_states(body_count, moon_distance)),
           final(static_cast<std::size_t>(body_count)),
           bodies(body_count),
           steps(step_count),
@@ -186,7 +202,7 @@ struct DeviceWorkload {
     cudaError_t alloc_error = cudaSuccess;
 
     DeviceWorkload(int body_count, int step_count, bool with_trajectory, int perturbation, double moon_distance)
-        : host_initial(initial_states(body_count)),
+        : host_initial(initial_states(body_count, moon_distance)),
           bodies(body_count),
           steps(step_count),
           write_trajectory(with_trajectory) {
@@ -258,7 +274,7 @@ struct DeviceWorkload {
         const std::int64_t state_bytes = static_cast<std::int64_t>(sizeof(MbsState));
         std::int64_t bytes = 2 * static_cast<std::int64_t>(bodies) * state_bytes;
         if (write_trajectory) {
-            bytes += static_cast<std::int64_t>(bodies) * steps * state_bytes;
+            bytes += static_cast<std::int64_t>(bodies) * (steps + 1) * state_bytes;
         }
         return bytes;
     }
@@ -288,7 +304,7 @@ void time_workload(benchmark::State& state, Workload workload, bool reset_before
     double total_ms = 0.0;
     for (auto _ : state) {
         if (reset_before_call) {
-            MBS_CUDA_CHECK_OR_SKIP(state, workload.reset(), "device reset failed");
+            if (workload.reset() != cudaSuccess) { state.SkipWithError("device reset failed"); return; }
         }
         timer.begin();
         const int rc = workload.run();
@@ -304,6 +320,9 @@ void time_workload(benchmark::State& state, Workload workload, bool reset_before
     set_throughput(state, total_ms, workload.bodies, workload.steps);
     state.counters["MB_per_call"] =
         static_cast<double>(workload.bytes_per_call()) / (1024.0 * 1024.0);
+    state.SetBytesProcessed(static_cast<std::int64_t>(state.iterations()) *
+                            workload.bytes_per_call());
+    return;
 }
 
 }  // namespace
@@ -314,15 +333,23 @@ void time_workload(benchmark::State& state, Workload workload, bool reset_before
 
 void BM_HostToDevice(benchmark::State& state) {
     const int bodies = static_cast<int>(state.range(0));
-    const std::vector<MbsState> host = initial_states(bodies);
+    const std::vector<MbsState> host = initial_states(bodies, 3.844e8);
     const std::size_t bytes = host.size() * sizeof(MbsState);
 
     MbsState* device = nullptr;
-    MBS_CUDA_CHECK_OR_SKIP(state, cudaMalloc(reinterpret_cast<void**>(&device), bytes), "cudaMalloc failed");
+    if (cudaMalloc(reinterpret_cast<void**>(&device), bytes) != cudaSuccess) {
+        state.SkipWithError("cudaMalloc failed");
+        return;
+    }
+    auto cleanup = [&]() { cudaFree(device); };
 
     // Warm-up copy, untimed.
-    MBS_CUDA_CHECK_OR_SKIP(state, cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice), "warm-up copy failed");
-    MBS_CUDA_CHECK_OR_SKIP(state, cudaDeviceSynchronize(), "warm-up synchronisation failed");
+    if (cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess) {
+        cleanup();
+        state.SkipWithError("warm-up copy failed");
+        return;
+    }
 
     GpuTimer timer;
     if (!timer.ok()) {
@@ -337,7 +364,11 @@ void BM_HostToDevice(benchmark::State& state) {
         const cudaError_t rc =
             cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice);
         const float ms = timer.end_ms();
-        MBS_CUDA_CHECK_OR_SKIP(state, rc, "cudaMemcpy H2D failed");
+        if (rc != cudaSuccess) {
+            cleanup();
+            state.SkipWithError("cudaMemcpy H2D failed");
+            return;
+        }
         state.SetIterationTime(static_cast<double>(ms) / 1.0e3);
         total_ms += static_cast<double>(ms);
     }
@@ -352,7 +383,7 @@ void BM_HostToDevice(benchmark::State& state) {
     state.SetBytesProcessed(static_cast<std::int64_t>(state.iterations()) *
                             static_cast<std::int64_t>(bytes));
 
-    cudaFree(device);
+    cleanup();
 }
 
 // ---------------------------------------------------------------------------
@@ -364,10 +395,7 @@ void BM_PropagateKernel(benchmark::State& state) {
     const int steps = static_cast<int>(state.range(1));
     const bool trajectory = state.range(2) != 0;
     DeviceWorkload workload(bodies, steps, trajectory, 0, 3.844e8);
-    const std::int64_t bytes_per_call = workload.bytes_per_call();
     time_workload(state, std::move(workload), true);
-    state.SetBytesProcessed(static_cast<std::int64_t>(state.iterations()) *
-                            bytes_per_call);
 }
 
 void BM_PropagateApi(benchmark::State& state) {
