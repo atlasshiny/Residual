@@ -1,0 +1,3 @@
+add_executable(multibody_test test_multibody.cpp)
+target_link_libraries(multibody_test PRIVATE multibody_solver)
+add_test(NAME multibody_conservation COMMAND multibody_test)

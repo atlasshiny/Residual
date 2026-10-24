@@ -10,11 +10,11 @@ rust:
 	@if [ -f Cargo.toml ]; then cargo build; else echo "No Cargo.toml found, skipping Rust build."; fi
 
 python:
-	uv sync
+	uv sync --extra dev --extra data
 
-test: python
-	uv run python -m ml.kan.demo
-	@if [ -f Cargo.toml ]; then cargo test; else echo "No Cargo.toml found, skipping Rust tests."; fi
+test: cuda python
+	uv run pytest -q
+	@if [ -f build/CTestTestfile.cmake ]; then ctest --test-dir build --output-on-failure; else echo "No CTest file found, skipping C++ tests."; fi
 
 clean:
 	rm -rf build .venv

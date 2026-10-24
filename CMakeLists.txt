@@ -19,6 +19,11 @@ find_package(CUDAToolkit REQUIRED)
 
 add_subdirectory(src/kernels)
 
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
+
 # Optional host-side demo. Keep it out of the default build when src/main.cpp
 # is empty so an empty translation unit is not compiled.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
