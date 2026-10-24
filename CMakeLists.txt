@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(multibody_solver LANGUAGES CXX CUDA)
+project(multibody_solver LANGUAGES CXX)
+
+if(SKIP_CUDA_TESTS)
+    # Disable CUDA language for the project if we are skipping CUDA tests in CI
+    # This prevents CMake from failing when nvcc is not found.
+else()
+    # Re-enable CUDA if not skipping
+    enable_language(CUDA)
+endif()
 
 include(FetchContent)
 
@@ -34,7 +42,9 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89 90)
 endif()
 
-find_package(CUDAToolkit REQUIRED)
+if(NOT SKIP_CUDA_TESTS)
+    find_package(CUDAToolkit REQUIRED)
+endif()
 
 add_subdirectory(src/kernels)
 

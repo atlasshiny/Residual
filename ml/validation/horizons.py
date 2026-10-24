@@ -58,6 +58,10 @@ def _library_candidates() -> list[Path]:
 
 def load_library(path: str | os.PathLike[str] | None = None):
     """Load the CUDA shared library."""
+    if os.environ.get("SKIP_CUDA_TESTS") == "1":
+        # Return a mock object or raise a specific error that tests can catch
+        # For now, we'll raise a RuntimeError that we can skip in pytest
+        raise RuntimeError("CUDA library loading skipped in CI")
     if path is not None:
         lib = ctypes.CDLL(str(path))
     else:
