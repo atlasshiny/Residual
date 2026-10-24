@@ -363,4 +363,15 @@ mod tests {
             assert!(s.v.x.is_finite() && s.v.y.is_finite() && s.v.z.is_finite());
         }
     }
+
+    #[test]
+    fn test_vec3_ops() {
+        let a = Vec3::new(1.0, 2.0, 3.0);
+        let b = Vec3::new(4.0, 5.0, 6.0);
+        assert_eq!(a.add(b), Vec3::new(5.0, 7.0, 9.0));
+        assert_eq!(a.sub(b), Vec3::new(-3.0, -3.0, -3.0));
+        assert_eq!(a.scale(2.0), Vec3::new(2.0, 4.0, 6.0));
+        assert_eq!(a.dot(b), 1.0 * 4.0 + 2.0 * 5.0 + 3.0 * 6.0);
+        assert_eq!(Vec3::ZERO, Vec3::new(0.0, 0.0, 0.0));
+    }
 }
