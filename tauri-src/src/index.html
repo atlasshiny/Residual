@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Residual — Orbit &amp; KAN Viewer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div class="brand-text">
+            <span class="brand-name">Residual</span>
+            <span class="brand-sub">Orbit trajectory &amp; KAN analysis</span>
+          </div>
+        </div>
+        <div class="topbar-center">
+          <span class="chip" id="scene-status">Initializing scene…</span>
+        </div>
+        <div class="topbar-actions">
+          <label class="toggle">
+            <input type="checkbox" id="auto-rotate" checked />
+            <span>Auto-rotate</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="show-grid" checked />
+            <span>Grid</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="show-axes" checked />
+            <span>Axes</span>
+          </label>
+          <button id="reset-view" class="btn ghost">Reset view</button>
+        </div>
+      </header>
+
+      <aside id="panel">
+        <section class="card" id="trajectory-card">
+          <div class="card-head">
+            <h2>Trajectory</h2>
+            <span class="status-dot" id="traj-dot"></span>
+          </div>
+          <p id="trajectory-status" class="status-text">Loading trajectory…</p>
+          <dl class="kv" id="traj-kv"></dl>
+        </section>
+
+        <section class="card" id="kan-card">
+          <div class="card-head">
+            <h2>KAN result</h2>
+            <span class="status-dot" id="kan-dot"></span>
+          </div>
+          <p id="kan-status" class="status-text">Loading KAN result…</p>
+
+          <div class="equation-block">
+            <div class="eq-label">Target</div>
+            <code id="eq-target" class="eq">—</code>
+            <div class="eq-label">SINDy discovered</div>
+            <code id="eq-sindy" class="eq highlight">—</code>
+          </div>
+
+          <h3 class="subhead">Metrics</h3>
+          <div class="metrics-grid" id="kan-metrics"></div>
+
+          <details class="raw-json">
+            <summary>Raw JSON</summary>
+            <pre id="kan-raw"></pre>
+          </details>
+        </section>
+      </aside>
+
+      <main id="viewport">
+        <div id="loading-overlay" class="overlay">
+          <div class="spinner"></div>
+          <p>Loading scene &amp; data…</p>
+        </div>
+        <div id="error-banner" class="error-banner" hidden></div>
+      </main>
+
+      <footer id="metrics-strip">
+        <div class="strip-inner" id="strip-metrics"></div>
+      </footer>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

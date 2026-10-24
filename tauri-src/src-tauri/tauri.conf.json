@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Residual",
+  "version": "0.1.0",
+  "identifier": "com.residual.ui",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Residual",
+        "width": 1280,
+        "height": 800
+      }
+    ]
+  }
+}
