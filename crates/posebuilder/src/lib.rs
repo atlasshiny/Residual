@@ -156,15 +156,18 @@ fn identity_matrix() -> [[f64; 3]; 3] {
 
 // Stub for state_to_pose to allow compilation.
 // In a real project, this would be implemented based on the pointing law.
-fn state_to_pose(_state: &dynamics::State, _pointing: PointingLaw, _t: f64, _config: &dynamics::Config) -> Pose {
+fn state_to_pose(
+    _state: &dynamics::State,
+    _pointing: PointingLaw,
+    _t: f64,
+    _config: &dynamics::Config,
+) -> Pose {
     Pose::identity()
 }
 
 // Removed duplicate delta_transform here.
 
-
 // Removed duplicate tests module here.
-
 
 // ---------------------------------------------------------------------------
 // Flexible constructor argument for PoseBuilder

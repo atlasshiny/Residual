@@ -9,3 +9,11 @@ dynamics = { path = "../dynamics" }
 [lib]
 name = "residual"
 path = "src/lib.rs"
+
+[dev-dependencies]
+ingest = { path = "../ingest" }
+schema = { path = "../schema" }
+
+[[example]]
+name = "residual_pipeline"
+path = "examples/residual_pipeline.rs"
