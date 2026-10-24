@@ -6,3 +6,4 @@ ml/kan/kan_result.json
 # Tauri build artifacts
 tauri-src/src-tauri/target/
 tauri-src/node_modules/
+tauri-src/src-tauri/gen/
