@@ -364,3 +364,22 @@ mod tests {
         assert_eq!(Vec3::ZERO, Vec3::new(0.0, 0.0, 0.0));
     }
 }
+
+#[cfg(test)]
+mod burn_tests {
+    use super::*;
+
+    #[test]
+    fn impulsive_burn_changes_velocity() {
+        let cfg = Config::default();
+        let state = State { r: Vec3::new(7.0e6, 0.0, 0.0), v: Vec3::new(0.0, 7.5e3, 0.0) };
+        let mut cfg_burn = cfg.clone();
+        cfg_burn.burns.push(Burn { t: 60.0, dv: Vec3::new(0.0, 10.0, 0.0) });
+        let traj_none = propagate(state, 2, 60.0, &cfg);
+        let traj_burn = propagate(state, 2, 60.0, &cfg_burn);
+        // After the burn, velocity should differ.
+        let v_none = traj_none.last().unwrap().v.y;
+        let v_burn = traj_burn.last().unwrap().v.y;
+        assert!((v_burn - v_none).abs() > 5.0, "burn did not affect velocity");
+    }
+}
