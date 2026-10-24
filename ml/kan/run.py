@@ -11,13 +11,25 @@ from pathlib import Path
 
 try:  # package import
     from .baselines import MLP, sindy, sindy_predict
-    from .dataset import build_xy, load_residual_table, resolve_times, split_by_time
+    from .dataset import (
+        _default_target_cols as _infer_target_cols,
+        build_xy,
+        load_residual_table,
+        resolve_times,
+        split_by_time,
+    )
     from .features import engineer_features
     from .kan import KAN, export_results, mse, r2_score, train
 except ImportError:  # script execution
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from baselines import MLP, sindy, sindy_predict
-    from dataset import build_xy, load_residual_table, resolve_times, split_by_time
+    from dataset import (
+        _default_target_cols as _infer_target_cols,
+        build_xy,
+        load_residual_table,
+        resolve_times,
+        split_by_time,
+    )
     from features import engineer_features
     from kan import KAN, export_results, mse, r2_score, train
 
@@ -115,31 +127,33 @@ def run(args) -> tuple:
     if getattr(args, "mission", None):
         mission = load_mission(args.mission)
 
+    feature_cols = None
+    engineered = False
     if getattr(args, "data", None):
         df = load_residual_table(args.data)
-        feature_cols_arg = _parse_cols(getattr(args, "features", None))
-        target_cols_arg = _parse_cols(getattr(args, "targets", None))
+        feature_cols = _parse_cols(getattr(args, "features", None))
+        target_cols = _parse_cols(getattr(args, "targets", None))
         time_col = getattr(args, "time_col", None)
 
-        times_probe = resolve_times(df, time_col)
-        engineered = False
+        times = resolve_times(df, time_col)
+        # Preserve the original residual target inference: resolve targets from
+        # the raw table before engineering appends derived feature columns.
+        if target_cols is None:
+            target_cols = _infer_target_cols(df, feature_cols)
+        # Derive well-scaled, physically meaningful features from time unless the
+        # caller pinned explicit --features (or opted in via --engineer).
         if getattr(args, "engineer", False) or (
-            feature_cols_arg is None and times_probe is not None
+            feature_cols is None and times is not None
         ):
-            try:
-                df, eng_cols = engineer_features(df, time_col)
-                feature_cols_arg = eng_cols
-                engineered = True
-            except Exception:  # noqa: BLE001
-                engineered = False
+            df, feature_cols = engineer_features(df, time_col)
+            engineered = True
 
         X, Y = build_xy(
             df,
-            feature_cols=feature_cols_arg,
-            target_cols=target_cols_arg,
+            feature_cols=feature_cols,
+            target_cols=target_cols,
         )
         target_desc = getattr(args, "targets", None) or "residual target"
-        times = resolve_times(df, time_col)
         if times is None:
             if mission is not None and mission["burns"]:
                 raise ValueError(
@@ -247,6 +261,8 @@ def run(args) -> tuple:
             "n_test": len(X_test),
         },
         "target": target_desc,
+        "features": feature_cols,
+        "engineered": engineered,
         "kan": {
             "dims": kan.dims,
             "num_basis": 8,
@@ -286,6 +302,7 @@ def run(args) -> tuple:
 
     print(f"split: train={len(X_train)} test={len(X_test)} "
           f"masked_fraction={masked_fraction:.3f}")
+    print(f"features: {feature_cols if feature_cols else 'raw'}")
     print(f"KAN   train mse={kan_train_mse:.6e} r2={kan_train_r2:.6f} | "
           f"test mse={kan_test_mse:.6e} r2={kan_test_r2:.6f}")
     print(f"MLP   train mse={mlp_train_mse:.6e} r2={mlp_train_r2:.6f} | "
