@@ -5,11 +5,20 @@
 
 #include <gtest/gtest.h>
 
+#ifdef SKIP_CUDA_TESTS
+#define CUDA_TEST
+#else
+#define CUDA_TEST
+#endif
+
 static bool finite3(const MbsVec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
 TEST(Multibody, TwoBodyOrbitConservesEnergy) {
+#ifdef SKIP_CUDA_TESTS
+    GTEST_SKIP() << "Skipping CUDA test in CI";
+#endif
     MbsConfig cfg;
     mbs_default_config(&cfg);
     cfg.dt = 60.0;
@@ -47,6 +56,9 @@ TEST(Multibody, TwoBodyOrbitConservesEnergy) {
 }
 
 TEST(Multibody, EarthMoonStepStaysFinite) {
+#ifdef SKIP_CUDA_TESTS
+    GTEST_SKIP() << "Skipping CUDA test in CI";
+#endif
     MbsConfig cfg;
     mbs_default_config(&cfg);
     cfg.dt = 60.0;
