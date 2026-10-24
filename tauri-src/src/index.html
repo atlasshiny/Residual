@@ -11,6 +11,14 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three/three.module.js",
+          "three/addons/": "./vendor/three/examples/jsm/"
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="app">
@@ -62,7 +70,7 @@
           <div class="equation-block">
             <div class="eq-label">Target</div>
             <code id="eq-target" class="eq">—</code>
-            <div class="eq-label">SINDy discovered</div>
+            <div class="eq-label" id="eq-sindy-label">SINDy discovered</div>
             <code id="eq-sindy" class="eq highlight">—</code>
           </div>
 

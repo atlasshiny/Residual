@@ -1,5 +1,5 @@
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
-import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /* ---------------- DOM refs ---------------- */
 const viewport = document.getElementById("viewport");
@@ -13,6 +13,7 @@ const kanStatus = document.getElementById("kan-status");
 const kanDot = document.getElementById("kan-dot");
 const eqTarget = document.getElementById("eq-target");
 const eqSindy = document.getElementById("eq-sindy");
+const eqSindyLabel = document.getElementById("eq-sindy-label");
 const kanMetrics = document.getElementById("kan-metrics");
 const kanRaw = document.getElementById("kan-raw");
 const stripMetrics = document.getElementById("strip-metrics");
@@ -146,6 +147,28 @@ function buildStripCard(label, value, cls = "") {
   return div;
 }
 
+function buildFallbackNote(msg) {
+  const div = document.createElement("div");
+  div.className = "fallback-note";
+  div.dataset.role = "data-fallback";
+  /* allow placement inside the 2-column metrics grid */
+  div.style.gridColumn = "1 / -1";
+  div.textContent = msg;
+  return div;
+}
+
+/* Show a symbolic string for the equation. Prefer the SINDy expression; if
+   absent, summarize the KAN edge splines so the panel is never empty. */
+function describeKanEdges(edges) {
+  if (!Array.isArray(edges) || edges.length === 0) return null;
+  return edges
+    .map((e) => {
+      const coeffs = (e.coeffs || []).map((c) => c.toFixed(4)).join(", ");
+      return `spline x${e.i}→z${e.j} · coeffs (${coeffs}) · r² ${fmt(e.r2, 3)}`;
+    })
+    .join("  |  ");
+}
+
 /* ---------------- resize ---------------- */
 function resize() {
   const w = viewport.clientWidth || 800;
@@ -167,10 +190,22 @@ function settle() {
   if (settledCount >= 2) setLoading(false);
 }
 
+function fileError(prefix, path, error) {
+  const detail = error && error.message ? error.message : String(error);
+  if (/JSON/i.test(detail)) {
+    return `${prefix}: ${path} is not valid JSON`;
+  }
+  if (/HTTP 404/.test(detail)) {
+    return `${prefix}: ${path} not found`;
+  }
+  return `${prefix}: ${path} (${detail})`;
+}
+
 async function loadTrajectory() {
+  const src = "./data/trajectory.json";
   setDot(trajDot, "loading");
   try {
-    const response = await fetch("./data/trajectory.json");
+    const response = await fetch(src);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     const rawPoints = data.points || [];
@@ -178,7 +213,17 @@ async function loadTrajectory() {
     if (points.length < 2) throw new Error("Not enough trajectory samples");
 
     // glowing tube along curve
-    const curve = new THREE.CatmullRomCurve3(points, false, "centripetal");
+    let maxR = 0, minR = Infinity, maxY = 0;
+    for (const p of points) {
+      const r = Math.hypot(p.x, p.z);
+      maxR = Math.max(maxR, r);
+      minR = Math.min(minR, r);
+      maxY = Math.max(maxY, Math.abs(p.y));
+    }
+    const closedLoop =
+      points.length > 2 && points[0].distanceTo(points[points.length - 1]) <= maxR * 0.01;
+    const curvePoints = closedLoop ? points.slice(0, -1) : points;
+    const curve = new THREE.CatmullRomCurve3(curvePoints, closedLoop, "centripetal");
     const tube = new THREE.TubeGeometry(curve, Math.max(points.length * 2, 64), 120, 12, false);
     const tubeMat = new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
@@ -209,18 +254,14 @@ async function loadTrajectory() {
     trajGroup.add(head);
 
     // metrics
-    let maxR = 0, minR = Infinity;
-    for (const p of points) {
-      const r = Math.hypot(p.x, p.z);
-      maxR = Math.max(maxR, r);
-      minR = Math.min(minR, r);
-    }
     trajKv.innerHTML = "";
+    const flat = maxY <= maxR * 0.005;
     const kvPairs = [
       ["Samples", points.length],
       ["Max radius", fmt(maxR, 1)],
       ["Min radius", fmt(minR, 1)],
-      ["Plane", "XZ (y ≈ 0)"],
+      ["Plane", flat ? "XZ (y ≈ 0)" : "3D"],
+      ["Loop", closedLoop ? "Closed" : "Open"],
     ];
     for (const [k, v] of kvPairs) {
       const dt = document.createElement("dt"); dt.textContent = k;
@@ -238,33 +279,43 @@ async function loadTrajectory() {
     sceneStatus.textContent = (trajectoryLoaded && kanLoaded) ? "Scene ready" : sceneStatus.textContent;
     settle();
   } catch (error) {
-    trajStatus.textContent = `Trajectory load failed: ${error.message}`;
+    const message = fileError("Trajectory data unavailable", src, error);
+    trajStatus.textContent = `Trajectory data unavailable — see note below`;
     setDot(trajDot, "err");
+    trajKv.innerHTML = "";
+    trajStatus.after(buildFallbackNote(`${message}. The 3D path will not render.`));
     trajectoryFailed = true;
-    showError(`Trajectory load failed: ${error.message}`);
+    showError(message);
     settle();
   }
 }
 
 async function loadKanResult() {
+  const src = "./data/kan_result.json";
   setDot(kanDot, "loading");
   try {
-    const response = await fetch("./data/kan_result.json");
+    const response = await fetch(src);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
 
     const target = (data.target || "—").toString();
-    const sindyExpr = (data.sindy && data.sindy.expression) ? data.sindy.expression : "—";
+    const kan = data.kan || {};
+    const sindy = data.sindy || {};
+    let sindyExpr = (data.sindy && data.sindy.expression) ? data.sindy.expression : null;
+    let eqKind = "SINDy discovered";
+    if (!sindyExpr) {
+      sindyExpr = describeKanEdges(kan.edges);
+      eqKind = "Learned (KAN edges)";
+    }
+    eqSindyLabel.textContent = eqKind;
     eqTarget.textContent = target;
-    eqSindy.textContent = sindyExpr;
+    eqSindy.textContent = sindyExpr || "—";
 
     kanRaw.textContent = JSON.stringify(data, null, 2);
 
     // metrics cards
     kanMetrics.innerHTML = "";
-    const kan = data.kan || {};
     const mlp = data.mlp || {};
-    const sindy = data.sindy || {};
     const cards = [
       ["KAN train R²", fmt(kan.train_r2, 4), true],
       ["KAN train MSE", fmt(kan.train_mse, 5), false],
@@ -293,10 +344,16 @@ async function loadKanResult() {
     sceneStatus.textContent = (trajectoryLoaded && kanLoaded) ? "Scene ready" : sceneStatus.textContent;
     settle();
   } catch (error) {
-    kanStatus.textContent = `KAN result load failed: ${error.message}`;
+    const message = fileError("KAN result unavailable", src, error);
+    kanStatus.textContent = "KAN result unavailable — see note below";
     setDot(kanDot, "err");
+    kanMetrics.innerHTML = "";
+    eqSindyLabel.textContent = "SINDy discovered";
+    eqTarget.textContent = "—";
+    eqSindy.textContent = "—";
+    kanMetrics.appendChild(buildFallbackNote(`${message}. Equations and metrics will stay empty.`));
     kanFailed = true;
-    showError(`KAN result load failed: ${error.message}`);
+    showError(message);
     settle();
   }
 }

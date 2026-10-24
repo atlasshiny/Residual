@@ -7,7 +7,26 @@ import re
 from pathlib import Path
 from typing import Any
 
-__all__ = ["build_xy", "load_residual_table", "split_xy"]
+__all__ = [
+    "build_xy",
+    "load_residual_table",
+    "resolve_time_column",
+    "resolve_times",
+    "split_by_time",
+    "split_xy",
+]
+
+# Column names commonly used for the (physical) sample time in residual
+# tables.  Matched case-insensitively, in priority order.
+_TIME_COLUMNS = (
+    "t",
+    "t_tdb",
+    "time",
+    "time_s",
+    "t_s",
+    "epoch_s",
+    "timestamp",
+)
 
 
 def _import_pandas():
@@ -147,6 +166,77 @@ def build_xy(df, feature_cols=None, target_cols=None):
     Y = [[float(tgt_data[k][i]) for k in range(len(target_cols))]
          for i in range(n)]
     return X, Y
+
+
+def resolve_time_column(df, time_col=None):
+    """Return the DataFrame column that holds sample times, or ``None``.
+
+    ``time_col`` wins when explicitly supplied (a ``KeyError`` is raised if it
+    is missing).  Otherwise the first known time-column name is used.
+    """
+    if time_col is not None:
+        if time_col not in df.columns:
+            raise KeyError(f"time column not found in DataFrame: {time_col}")
+        return time_col
+    by_lower = {str(c).lower(): c for c in df.columns}
+    for name in _TIME_COLUMNS:
+        if name in by_lower:
+            return by_lower[name]
+    return None
+
+
+def resolve_times(df, time_col=None):
+    """Return sample times as a list of floats, or ``None`` if absent."""
+    col = resolve_time_column(df, time_col)
+    if col is None:
+        return None
+    return [float(v) for v in df[col].tolist()]
+
+
+def split_by_time(X, Y, t=None, test_fraction=0.2):
+    """Deterministically split ``(X, Y)`` by time into train/test.
+
+    Samples are ordered by ``t`` (ties keep their original order) and the
+    first ``1 - test_fraction`` fraction becomes the training set, with the
+    remaining latest samples held out for testing.  When ``t`` is ``None`` the
+    input order is treated as time order, which also makes this deterministic
+    for synthetic/indexed data.
+
+    Returns ``(X_train, X_test, Y_train, Y_test)`` — the same shape as
+    :func:`split_xy` — but never shuffles.
+    """
+    if len(X) != len(Y):
+        raise ValueError("X and Y must have the same length")
+    n = len(X)
+    if not 0.0 <= test_fraction < 1.0:
+        raise ValueError("test_fraction must satisfy 0 <= test_fraction < 1")
+    if n == 0:
+        return [], [], [], []
+
+    if t is None:
+        order = list(range(n))
+    else:
+        if len(t) != n:
+            raise ValueError("t must have the same length as X")
+        times = [float(v) for v in t]
+        order = sorted(range(n), key=lambda i: (times[i], i))
+
+    n_test = int(n * test_fraction)
+    # For tiny datasets keep at least one held-out and one training sample so
+    # downstream metrics are still defined.
+    if n > 1 and test_fraction > 0.0 and n_test == 0:
+        n_test = 1
+    if n > 1 and n_test >= n:
+        n_test = n - 1
+    split = n - n_test
+
+    train_idx = order[:split]
+    test_idx = order[split:]
+    X_train = [X[i] for i in train_idx]
+    X_test = [X[i] for i in test_idx]
+    Y_train = [Y[i] for i in train_idx]
+    Y_test = [Y[i] for i in test_idx]
+    return X_train, X_test, Y_train, Y_test
 
 
 def split_xy(X, Y, test_fraction=0.2, seed=0):

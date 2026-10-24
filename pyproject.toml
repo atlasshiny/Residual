@@ -8,6 +8,7 @@ dependencies = []
 
 [project.optional-dependencies]
 data = ["numpy>=1.26", "pandas>=2.2", "pyarrow>=15.0"]
+render = ["numpy>=1.26"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [build-system]

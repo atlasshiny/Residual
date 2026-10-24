@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum PointingLaw {
     Earth,
     Moon,
@@ -154,15 +155,62 @@ fn identity_matrix() -> [[f64; 3]; 3] {
     [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
 }
 
-// Stub for state_to_pose to allow compilation.
-// In a real project, this would be implemented based on the pointing law.
-fn state_to_pose(
-    _state: &dynamics::State,
-    _pointing: PointingLaw,
-    _t: f64,
-    _config: &dynamics::Config,
+/// Build a camera pose from a propagator state and a synthetic pointing law.
+///
+/// The camera sits at the spacecraft position and looks at the requested body.
+/// `+Z` is the optical axis, `+X` points right, and `+Y` points down, matching
+/// the OpenCV convention Cosmos uses for camera actions.
+///
+/// Input state positions are metres (the [`dynamics`] convention). The returned
+/// pose translation is in **kilometres** so that [`to_action`] can divide by a
+/// scale `k` expressed in km per Cosmos-metre.
+///
+/// [`PointingLaw::Data`] falls back to Earth pointing: the canonical
+/// `t,x,y,z,vx,vy,vz` trajectory carries no attitude, so there is no "real"
+/// attitude to consume here. Every manifest records the law that was applied.
+pub fn state_to_pose(
+    state: &dynamics::State,
+    pointing: PointingLaw,
+    t: f64,
+    config: &dynamics::Config,
 ) -> Pose {
-    Pose::identity()
+    let (earth, moon) = dynamics::earth_moon_positions(t, config);
+    let target = match pointing {
+        PointingLaw::Moon => moon,
+        // `Data` is a request for measured attitude, which this input format
+        // does not have; Earth pointing is the documented fallback.
+        PointingLaw::Earth | PointingLaw::Data => earth,
+    };
+
+    let origin_km = state.r.scale(1.0e-3);
+    let target_km = target.scale(1.0e-3);
+
+    // Optical axis (camera +Z).
+    let mut forward = normalize(target_km.sub(origin_km));
+    if forward.norm() == 0.0 {
+        forward = Vec3::new(1.0, 0.0, 0.0);
+    }
+
+    // Inertial "up" is the Earth pole. Fall back to another axis when the
+    // look direction is parallel to it.
+    let world_up = Vec3::new(0.0, 0.0, 1.0);
+    let mut right = normalize(cross(forward, world_up));
+    if right.norm() == 0.0 {
+        right = normalize(cross(forward, Vec3::new(1.0, 0.0, 0.0)));
+    }
+    let down = normalize(cross(forward, right));
+
+    // Columns are the camera axes expressed in the inertial frame.
+    let rotation = [
+        [right.x, down.x, forward.x],
+        [right.y, down.y, forward.y],
+        [right.z, down.z, forward.z],
+    ];
+
+    Pose {
+        rotation,
+        translation: origin_km,
+    }
 }
 
 // Removed duplicate delta_transform here.
@@ -475,6 +523,10 @@ fn transpose3(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
 // Scale k helpers
 // ---------------------------------------------------------------------------
 
+/// Divide a delta's translation by `k` (km per Cosmos-metre).
+///
+/// Pose translations are expected in kilometres, matching [`state_to_pose`].
+/// Rotation is left untouched.
 pub fn apply_scale(delta: &Pose, k: f64) -> Pose {
     let mut out = *delta;
     if k != 0.0 && k.is_finite() {
@@ -493,6 +545,12 @@ pub fn normalize_scale(delta: &Pose, k: f64) -> Pose {
     apply_scale(delta, k)
 }
 
+/// Encode `ΔT` as 9D: `[tx, ty, tz, r6]`.
+///
+/// `delta.translation` is in kilometres; `k` is kilometres per Cosmos-metre, so
+/// the stored translation is the distance in normalized Cosmos units. `r6` is
+/// the first two **columns** of the rotation matrix, flattened column-major
+/// (Zhou et al. 2019). This is the row format in `actions.json`.
 pub fn to_action(delta: &Pose, k: f64) -> [f64; 9] {
     let s = apply_scale(delta, k);
     let r6 = rot_to_6d(&s.rotation);
@@ -522,6 +580,10 @@ pub fn delta_to_9d(delta: &Pose, k: f64) -> [f64; 9] {
     to_action(delta, k)
 }
 
+/// Decode a 9D action back into `ΔT`.
+///
+/// The returned translation is in kilometres (stored Cosmos translation
+/// multiplied by `k`), the inverse of [`to_action`].
 pub fn from_action(action: &[f64], k: f64) -> Pose {
     let mut a = [0.0; 9];
     for i in 0..9.min(action.len()) {
@@ -747,6 +809,43 @@ mod tests {
             }
         }
         assert!((p.translation.x - p2.translation.x).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pointing_law_builds_proper_camera_pose() {
+        let config = dynamics::Config::default();
+        let state = dynamics::State {
+            r: Vec3::new(7.0e6, 0.0, 0.0),
+            v: Vec3::new(0.0, 7_546.0, 0.0),
+        };
+        let pose = state_to_pose(&state, PointingLaw::Earth, 0.0, &config);
+
+        // Translation is reported in kilometres.
+        assert!((pose.translation.x - 7_000.0).abs() < 1e-9);
+        assert!((pose.translation.y).abs() < 1e-9);
+        assert!((pose.translation.z).abs() < 1e-9);
+
+        // R^T R = I and det(R) = 1 (a proper rotation, no reflection).
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut dot = 0.0;
+                for k in 0..3 {
+                    dot += pose.rotation[k][i] * pose.rotation[k][j];
+                }
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!((dot - expected).abs() < 1e-12);
+            }
+        }
+        let det = pose.rotation[0][0]
+            * (pose.rotation[1][1] * pose.rotation[2][2]
+                - pose.rotation[1][2] * pose.rotation[2][1])
+            - pose.rotation[0][1]
+                * (pose.rotation[1][0] * pose.rotation[2][2]
+                    - pose.rotation[1][2] * pose.rotation[2][0])
+            + pose.rotation[0][2]
+                * (pose.rotation[1][0] * pose.rotation[2][1]
+                    - pose.rotation[1][1] * pose.rotation[2][0]);
+        assert!((det - 1.0).abs() < 1e-12);
     }
 
     fn approx_pose(a: Pose, b: Pose) -> bool {

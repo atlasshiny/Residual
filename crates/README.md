@@ -35,3 +35,23 @@ from ml.kan.dataset import load_residual_table, build_xy
 df = load_residual_table("residuals.csv")
 X, Y = build_xy(df, feature_cols="t,drx,dry,drz", target_cols="dvx,dvy,dvz")
 ```
+
+## Cosmos pose/action pipeline
+
+```sh
+cargo run -p posebuilder --example pose_pipeline -- \
+  ref.csv jobs/demo --job-id demo --mode forward_dynamics \
+  --t0 0 --t1 5 --fps 24 --frames 120 --scale-k 1000 --pointing earth
+
+python scripts/mock_cosmos_worker.py jobs/demo
+```
+
+The first command writes the §6.4 job manifest (`job.json`) and 9D action rows
+(`actions.json`); the second writes `sample_outputs.json` and the ipc
+`manifest.json`. The full schema and the two accepted job shapes are in
+[`docs/cosmos-contract.md`](../docs/cosmos-contract.md). The ipc example
+`enqueue_job` covers the native queue form:
+
+```sh
+cargo run -p ipc --example enqueue_job -- jobs demo inverse_dynamics clip.mp4
+```

@@ -16,7 +16,12 @@ def lib():
     try:
         return load_library()
     except (FileNotFoundError, RuntimeError) as e:
-        if "skipped in CI" in str(e) or "not built" in str(e):
+        message = str(e)
+        if (
+            "skipped in CI" in message
+            or "not built" in message
+            or "Could not find" in message
+        ):
             pytest.skip(f"CUDA shared library not available: {e}")
         raise
 
@@ -26,8 +31,13 @@ def test_make_synthetic_reference_shape():
         df = make_synthetic_reference(steps=10, dt=60.0)
         assert len(df) == 11
         assert {"t", "x", "y", "z", "vx", "vy", "vz"}.issubset(df.columns)
-    except RuntimeError as e:
-        if "skipped in CI" in str(e):
+    except (FileNotFoundError, RuntimeError) as e:
+        message = str(e)
+        if (
+            "skipped in CI" in message
+            or "not built" in message
+            or "Could not find" in message
+        ):
             pytest.skip("Skipping CUDA-dependent synthetic reference generation in CI")
         raise
 
@@ -55,7 +65,12 @@ def test_load_reference_csv(tmp_path):
         loaded = load_reference(path)
         assert len(loaded) == 6
         assert list(loaded.columns)[:2] == ["t", "x"]
-    except RuntimeError as e:
-        if "skipped in CI" in str(e):
+    except (FileNotFoundError, RuntimeError) as e:
+        message = str(e)
+        if (
+            "skipped in CI" in message
+            or "not built" in message
+            or "Could not find" in message
+        ):
             pytest.skip("Skipping CUDA-dependent synthetic reference generation in CI")
         raise
