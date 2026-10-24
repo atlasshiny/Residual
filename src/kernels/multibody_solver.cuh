@@ -195,4 +195,13 @@ void mbs_default_config(MbsConfig* config);
 // 4,673 km, so convert geocentric initial states before calling.
 int mbs_propagate(const MbsState* initial_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* final_states, MbsState* trajectory);
 
+// Device-resident variant: propagates in place on memory the caller already
+// owns.  device_states and device_trajectory must be device pointers; the
+// trajectory buffer follows the same layout as mbs_propagate and may be null.
+//
+// This launches the kernel and returns without synchronising, so callers can
+// time pure GPU work with CUDA events and reuse allocations across calls.
+// Validate the launch result before reading the buffers.
+int mbs_propagate_device(MbsState* device_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* device_trajectory);
+
 }  // extern "C"

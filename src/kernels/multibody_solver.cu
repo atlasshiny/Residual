@@ -186,4 +186,23 @@ int mbs_propagate(const MbsState* initial_states, int num_bodies, int num_steps,
     return static_cast<int>(error);
 }
 
+// Kernel-only path: no allocation, no copies, no synchronisation.  The
+// benchmark suite uses this to separate GPU compute time from memory traffic.
+int mbs_propagate_device(MbsState* device_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* device_trajectory) {
+    if (device_states == nullptr || !valid_config(config) ||
+        num_bodies <= 0 || num_steps < 0) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+
+    // One thread per particle; the grid-stride loop covers larger batches.
+    constexpr int kThreads = 256;
+    const int blocks = (num_bodies - 1) / kThreads + 1;
+
+    multibody_kernel<<<blocks, kThreads>>>(device_states, num_bodies, num_steps, *config, device_trajectory);
+
+    // Launch errors surface synchronously; kernel faults surface at the next
+    // synchronisation (the benchmark records a stop event immediately after).
+    return static_cast<int>(cudaGetLastError());
+}
+
 }  // extern "C"

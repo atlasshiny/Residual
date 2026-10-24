@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data residual kan test-cpu test-cuda tauri clean
+.PHONY: all cuda rust python test fetch-data residual kan test-cpu test-cuda tauri bench clean
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -6,6 +6,7 @@ HORIZONS_ARGS ?=
 CONVERT_ARGS ?=
 KAN_DATA ?= data/residual_table.csv
 KAN_ARGS ?= $(if $(wildcard $(KAN_DATA)),--data $(KAN_DATA),)
+BENCH_ARGS ?= --benchmark_min_time=1s
 
 all: cuda rust python
 
@@ -56,6 +57,13 @@ test-cpu:
 	SKIP_CUDA_TESTS=1 uv run --extra dev --extra data pytest -q tests ml
 	@if [ -f $(BUILD_CPU_DIR)/CTestTestfile.cmake ]; then ctest --test-dir $(BUILD_CPU_DIR) --output-on-failure; else echo "No CTest file found, skipping C++ tests."; fi
 	cargo test --workspace
+
+# Build and run the CUDA propagator benchmark suite.  Requires the CUDA
+# toolkit; pass extra Google Benchmark flags with BENCH_ARGS.
+bench:
+	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+	cmake --build $(BUILD_DIR) -j --target multibody_bench
+	$(BUILD_DIR)/benchmarks/multibody_bench $(BENCH_ARGS)
 
 # Full validation including the CUDA kernel and comparison tests.
 test-cuda:

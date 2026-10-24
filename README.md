@@ -55,6 +55,18 @@ ctest --test-dir build --output-on-failure
 The CUDA build writes the shared library used by `ml/validation/horizons.py`
 to `build/src/kernels/libmultibody_solver_shared.so`.
 
+CUDA benchmarks (event-timed; warm-up excluded):
+
+```bash
+make bench
+# or
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+cmake --build build -j --target multibody_bench
+./build/benchmarks/multibody_bench --benchmark_min_time=1s
+```
+
+See `benchmarks/README.md` for the series definitions and counters.
+
 Rust workspace:
 
 ```bash
