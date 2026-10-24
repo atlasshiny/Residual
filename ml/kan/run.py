@@ -239,14 +239,14 @@ def run(args) -> tuple:
             })
 
     # --- MLP ---
-    mlp = MLP([n_features, 8, out_dim])
+    mlp = MLP([n_features, 16, 8, out_dim])
     mlp.train(X_train, Y_train, epochs=epochs, lr=5e-1, verbose=False)
     mlp_train_mse, mlp_train_r2 = _eval(mlp, X_train, Y_train)
     mlp_test_mse, mlp_test_r2 = _eval(mlp, X_test, Y_test)
 
     # --- SINDy (fit on train, evaluate on both) ---
-    sindy_degree = 3
-    Xi, names, exprs = sindy(X_train, Y_train, threshold=0.05, degree=sindy_degree)
+    sindy_degree = 2
+    Xi, names, exprs = sindy(X_train, Y_train, threshold=0.1, degree=sindy_degree)
     sindy_predict_fn = lambda batch: sindy_predict(batch, Xi, degree=sindy_degree)
     sindy_train_mse, sindy_train_r2 = _eval(
         None, X_train, Y_train, predict=sindy_predict_fn

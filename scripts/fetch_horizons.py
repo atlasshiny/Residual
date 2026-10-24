@@ -61,7 +61,7 @@ def _default_stop(start: str) -> str:
             parsed = datetime.strptime(start, fmt)
         except ValueError:
             continue
-        return (parsed + timedelta(days=1)).strftime(fmt)
+        return (parsed + timedelta(days=30)).strftime(fmt)
     raise ValueError(
         f"could not parse start time {start!r}; use YYYY-MM-DD or "
         "YYYY-MM-DD HH:MM"
