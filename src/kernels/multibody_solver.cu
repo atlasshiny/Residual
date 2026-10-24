@@ -51,10 +51,26 @@ template <typename T>
 struct DeviceArray {
     T* data = nullptr;
 
+    DeviceArray() = default;
     ~DeviceArray() {
         if (data != nullptr) {
             cudaFree(data);
         }
+    }
+    DeviceArray(const DeviceArray&) = delete;
+    DeviceArray& operator=(const DeviceArray&) = delete;
+    DeviceArray(DeviceArray&& other) noexcept : data(other.data) {
+        other.data = nullptr;
+    }
+    DeviceArray& operator=(DeviceArray&& other) noexcept {
+        if (this != &other) {
+            if (data != nullptr) {
+                cudaFree(data);
+            }
+            data = other.data;
+            other.data = nullptr;
+        }
+        return *this;
     }
 
     cudaError_t allocate(std::size_t count) {

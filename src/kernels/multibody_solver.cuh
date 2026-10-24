@@ -140,6 +140,8 @@ MBS_DEVICE_INLINE MbsVec3 earth_j2_acceleration(const MbsVec3& d, const MbsConfi
 }
 
 // Sum of the Earth and Moon point-mass terms plus the optional perturbation.
+// NOTE: the Sun is omitted; this frame accelerates around the Sun at
+// ~6e-3 m/s^2, a ~1e-3 relative model error over a one-day arc.
 // Softening replaces |d|^3 with (|d|^2 + eps^2)^(3/2) to keep close
 // encounters finite.
 MBS_DEVICE_INLINE MbsVec3 acceleration(const MbsVec3& r, const MbsConfig& config, double t) {

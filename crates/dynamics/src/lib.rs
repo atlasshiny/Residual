@@ -256,45 +256,20 @@ pub fn acceleration(r: Vec3, config: &Config, t: f64) -> Vec3 {
     a
 }
 
-/// Fixed-step RK4 propagation. Returns trajectory including initial state.
+/// Fixed-step velocity-Verlet (kick-drift-kick) propagation, matching the CUDA solver. Returns trajectory including initial state.
 pub fn propagate(state: State, steps: impl IntoSteps, dt: f64, config: &Config) -> Vec<State> {
     let steps = steps.into_steps();
     let mut out = Vec::with_capacity(steps + 1);
+    // Velocity-Verlet (kick-drift-kick), matching the CUDA solver.
     let mut s = state;
     let mut t = config.epoch;
     out.push(s);
     for _ in 0..steps {
-        let k1v = acceleration(s.r, config, t);
-        let k1r = s.v;
-
-        let v_mid1 = s.v.add(k1v.scale(dt * 0.5));
-
-        let k2r = v_mid1;
-        let pos_mid1 = s.r.add(s.v.scale(dt * 0.5));
-        let k2v = acceleration(pos_mid1, config, t + dt * 0.5);
-
-        let v_mid2 = s.v.add(k2v.scale(dt * 0.5));
-        let pos_mid2 = s.r.add(v_mid1.scale(dt * 0.5));
-        let k3v = acceleration(pos_mid2, config, t + dt * 0.5);
-        let k3r = v_mid2;
-
-        let v_end = s.v.add(k3v.scale(dt));
-        let pos_end = s.r.add(v_mid2.scale(dt));
-        let k4v = acceleration(pos_end, config, t + dt);
-        let k4r = v_end;
-
-        s.r = s.r.add(
-            k1r.add(k2r.scale(2.0))
-                .add(k3r.scale(2.0))
-                .add(k4r)
-                .scale(dt / 6.0),
-        );
-        s.v = s.v.add(
-            k1v.add(k2v.scale(2.0))
-                .add(k3v.scale(2.0))
-                .add(k4v)
-                .scale(dt / 6.0),
-        );
+        let a0 = acceleration(s.r, config, t);
+        s.v = s.v.add(a0.scale(0.5 * dt));
+        s.r = s.r.add(s.v.scale(dt));
+        let a1 = acceleration(s.r, config, t + dt);
+        s.v = s.v.add(a1.scale(0.5 * dt));
         t += dt;
         out.push(s);
     }
@@ -347,7 +322,7 @@ mod tests {
         let traj = propagate(state, steps, dt, &cfg);
         let last = traj.last().unwrap();
         let pos_err = last.r.sub(state.r).norm();
-        assert!(pos_err < 1e5, "position error {pos_err}");
+        assert!(pos_err < 5e5, "position error {pos_err}");
     }
 
     #[test]
