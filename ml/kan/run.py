@@ -12,11 +12,13 @@ from pathlib import Path
 try:  # package import
     from .baselines import MLP, sindy, sindy_predict
     from .dataset import build_xy, load_residual_table, resolve_times, split_by_time
+    from .features import engineer_features
     from .kan import KAN, export_results, mse, r2_score, train
 except ImportError:  # script execution
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from baselines import MLP, sindy, sindy_predict
     from dataset import build_xy, load_residual_table, resolve_times, split_by_time
+    from features import engineer_features
     from kan import KAN, export_results, mse, r2_score, train
 
 
@@ -115,13 +117,29 @@ def run(args) -> tuple:
 
     if getattr(args, "data", None):
         df = load_residual_table(args.data)
+        feature_cols_arg = _parse_cols(getattr(args, "features", None))
+        target_cols_arg = _parse_cols(getattr(args, "targets", None))
+        time_col = getattr(args, "time_col", None)
+
+        times_probe = resolve_times(df, time_col)
+        engineered = False
+        if getattr(args, "engineer", False) or (
+            feature_cols_arg is None and times_probe is not None
+        ):
+            try:
+                df, eng_cols = engineer_features(df, time_col)
+                feature_cols_arg = eng_cols
+                engineered = True
+            except Exception:  # noqa: BLE001
+                engineered = False
+
         X, Y = build_xy(
             df,
-            feature_cols=_parse_cols(getattr(args, "features", None)),
-            target_cols=_parse_cols(getattr(args, "targets", None)),
+            feature_cols=feature_cols_arg,
+            target_cols=target_cols_arg,
         )
         target_desc = getattr(args, "targets", None) or "residual target"
-        times = resolve_times(df, getattr(args, "time_col", None))
+        times = resolve_times(df, time_col)
         if times is None:
             if mission is not None and mission["burns"]:
                 raise ValueError(
@@ -288,6 +306,8 @@ def build_parser():
                         help="mission JSON with burn windows to mask")
     parser.add_argument("--time-col", default=None,
                         help="time column used for the held-out split and burn mask")
+    parser.add_argument("--engineer", action="store_true",
+                        help="derive scaled time features instead of raw columns")
     parser.add_argument("--test-fraction", type=float, default=0.2,
                         help="fraction of latest samples held out for testing")
     parser.add_argument("--epochs", type=int, default=150)
