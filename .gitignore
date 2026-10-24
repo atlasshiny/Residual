@@ -1,4 +1,45 @@
-data/
-*.log
-*.tmp
+# Rust
+/target
+/Cargo.lock
+.rustup
+.cargo
+
+# CUDA
+*.o
+*.a
+*.so
+*.d
+*.gpdb
+*.pdb
+
+# Machine Learning
+__pycache__/
+*.pyc
 .env
+.venv
+.ipynb-checkpoints
+
+# General
+.DS_Store
+.Trash
+.vscode
+.idea
+*.tmp
+*.log
+
+# OS generated
+*~
+*.swp
+*.swo
+
+# Other
+/data
+.env
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Ignore specific files if they exist
+*.csv
+*.json
+*.txt
