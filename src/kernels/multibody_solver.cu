@@ -31,7 +31,7 @@ __global__ void multibody_kernel(MbsState* states, int num_bodies, int num_steps
 
         for (int step = 0; step < num_steps; ++step) {
             mbs::velocity_verlet_step(state, t, config.dt, config);
-            t += config.dt;
+            t = config.epoch + static_cast<double>(step + 1) * config.dt;
 
             if (trajectory != nullptr) {
                 // Layout is [frame][body], so frames stay contiguous.
@@ -110,7 +110,7 @@ void mbs_default_config(MbsConfig* config) {
     config->moon_distance = mbs::kEarthMoonDistance;
     config->moon_period = mbs::kMoonPeriod;
     config->moon_phase = 0.0;
-    config->softening = 1.0;
+    config->softening = 0.0;
     config->perturbation = 0;
 }
 

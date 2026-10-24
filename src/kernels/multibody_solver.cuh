@@ -41,7 +41,7 @@ struct MbsConfig {
     double moon_distance;   // Earth-Moon separation, metres
     double moon_period;     // 0 pins the Moon in place
     double moon_phase;      // radians at t = 0
-    double softening;       // metres; 0 gives the exact point-mass terms
+    double softening;       // metres; 0 gives the exact point-mass terms (default)
     int perturbation;       // 0 = none, 1 = Earth J2
 };
 
@@ -92,11 +92,15 @@ __device__ __forceinline__ void earth_moon_positions(double t, const MbsConfig& 
     }
 
     double theta = config.moon_phase;
-    if (config.moon_period > 0.0) {
-        theta += 2.0 * kPi * t / config.moon_period;
+    const double total_mu = config.mu_earth + config.mu_moon;
+    // Circular motion is Keplerian: omega^2 = total_mu / D^3.
+    // moon_period is retained for API compatibility but is not used here.
+    if (config.moon_distance > 0.0 && total_mu > 0.0) {
+        theta += sqrt(total_mu / (config.moon_distance *
+                                  config.moon_distance *
+                                  config.moon_distance)) * t;
     }
 
-    const double total_mu = config.mu_earth + config.mu_moon;
     const double moon_fraction =
         (total_mu > 0.0) ? (config.mu_moon / total_mu) : 0.0;
 
@@ -110,6 +114,7 @@ __device__ __forceinline__ void earth_moon_positions(double t, const MbsConfig& 
 }
 
 // J2 acceleration relative to the Earth's centre (d = r - r_E).
+// z is the Earth spin axis; the ephemeris plane is equatorial in this model.
 __device__ __forceinline__ MbsVec3 earth_j2_acceleration(const MbsVec3& d, const MbsConfig& config) {
     const double r2 = dot(d, d);
     if (r2 <= 0.0) {
@@ -117,6 +122,9 @@ __device__ __forceinline__ MbsVec3 earth_j2_acceleration(const MbsVec3& d, const
     }
 
     const double r = sqrt(r2);
+    if (r <= config.earth_radius) {
+        return {};  // J2 is only valid outside the body.
+    }
     const double z2_over_r2 = (d.z * d.z) / r2;
 
     // -3/2 * J2 * mu * R^2 / r^5
@@ -146,7 +154,7 @@ __device__ __forceinline__ MbsVec3 acceleration(const MbsVec3& r, const MbsConfi
     if (config.mu_earth > 0.0) {
         a += d_earth * (-config.mu_earth / (r_earth2 * sqrt(r_earth2)));
     }
-    if (config.mu_moon > 0.0) {
+    if (config.mu_moon > 0.0 && config.moon_distance > 0.0) {
         a += d_moon * (-config.mu_moon / (r_moon2 * sqrt(r_moon2)));
     }
     if (config.perturbation == 1) {
@@ -183,6 +191,8 @@ void mbs_default_config(MbsConfig* config);
 //
 // The call is synchronous. Returns cudaSuccess (0) on success, otherwise a
 // cudaError_t value suitable for cudaGetErrorString().
+// All positions are barycentric: Earth is offset from the origin by about
+// 4,673 km, so convert geocentric initial states before calling.
 int mbs_propagate(const MbsState* initial_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* final_states, MbsState* trajectory);
 
 }  // extern "C"
