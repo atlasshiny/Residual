@@ -480,10 +480,52 @@ def r2_score(pred, target):
     return 1.0 - ss_res / ss_tot
 
 
-def train(model, X, Y, epochs=200, lr=1e-2, verbose=True):
-    """Full-batch gradient descent on MSE."""
+def _kan_state_copy(model):
+    """Deep copy of KAN trainable parameters (for early stopping restore)."""
+    return {
+        "x_mean": list(model.x_mean) if model.x_mean is not None else None,
+        "x_std": list(model.x_std) if model.x_std is not None else None,
+        "layers": [
+            {
+                "coeff": [[list(c) for c in layer.coeff[i]]
+                          for i in range(layer.in_dim)],
+                "linear": [[v for v in row] for row in layer.linear],
+                "bias": list(layer.bias),
+            }
+            for layer in model.layers
+        ],
+    }
+
+
+def _kan_state_restore(model, state):
+    """Restore KAN trainable parameters from a saved state dict."""
+    model.x_mean = list(state["x_mean"]) if state["x_mean"] is not None else None
+    model.x_std = list(state["x_std"]) if state["x_std"] is not None else None
+    for layer, ls in zip(model.layers, state["layers"]):
+        for i in range(layer.in_dim):
+            for j in range(layer.out_dim):
+                for k in range(layer.num_basis):
+                    layer.coeff[i][j][k] = ls["coeff"][i][j][k]
+                layer.linear[i][j] = ls["linear"][i][j]
+        for j in range(layer.out_dim):
+            layer.bias[j] = ls["bias"][j]
+
+
+def train(model, X, Y, epochs=200, lr=1e-2, verbose=True,
+          X_val=None, Y_val=None, patience=None):
+    """Full-batch gradient descent on MSE with optional early stopping.
+
+    If ``X_val``/``Y_val`` are provided and ``patience`` is set, training
+    stops when validation loss hasn't improved for ``patience`` epochs, and
+    the best (lowest validation loss) model state is restored.
+    """
     n = len(X)
     m = len(Y[0])
+
+    best_state = None
+    best_val = float("inf")
+    patience_counter = 0
+
     for epoch in range(1, epochs + 1):
         pred = model.forward(X)
         loss = mse(pred, Y)
@@ -492,8 +534,31 @@ def train(model, X, Y, epochs=200, lr=1e-2, verbose=True):
                for j in range(m)] for i in range(n)]
         model.backward(dY)
         model.update(lr)
+
+        if X_val is not None and Y_val is not None:
+            val_pred = model.forward(X_val)
+            val_loss = mse(val_pred, Y_val)
+            if val_loss < best_val:
+                best_val = val_loss
+                best_state = _kan_state_copy(model)
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience is not None and patience_counter >= patience:
+                    if verbose:
+                        print(f"epoch {epoch:4d}  mse = {loss:.6e}  "
+                              f"(early stop, best val mse={best_val:.6e})")
+                    break
+
         if verbose and (epoch == 1 or epoch % 20 == 0 or epoch == epochs):
-            print(f"epoch {epoch:4d}  mse = {loss:.6e}")
+            extra = ""
+            if X_val is not None and Y_val is not None:
+                extra = f"  val_mse={mse(model.forward(X_val), Y_val):.6e}"
+            print(f"epoch {epoch:4d}  mse = {loss:.6e}{extra}")
+
+    if best_state is not None:
+        _kan_state_restore(model, best_state)
+
     return model
 
 

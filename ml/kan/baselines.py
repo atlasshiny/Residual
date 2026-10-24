@@ -93,11 +93,34 @@ class MLP:
             self.W[li] -= lr * grads_W[li]
             self.b[li] -= lr * grads_b[li]
 
-    def train(self, X, Y, epochs=200, lr=1e-2, verbose=True):
+    # ------------------------------------------------------------------
+    # state save / restore (for early stopping)
+    # ------------------------------------------------------------------
+    def _save_state(self):
+        return {
+            "W": [w.copy() for w in self.W],
+            "b": [b.copy() for b in self.b],
+        }
+
+    def _load_state(self, state):
+        self.W = [w.copy() for w in state["W"]]
+        self.b = [b.copy() for b in state["b"]]
+
+    def train(self, X, Y, epochs=200, lr=1e-2, verbose=True,
+              X_val=None, Y_val=None, patience=None):
         X = np.asarray(X, dtype=np.float64)
         Y = np.asarray(Y, dtype=np.float64)
         n = X.shape[0]
         m = Y.shape[1]
+
+        best_state = None
+        best_val = float("inf")
+        patience_counter = 0
+
+        Y_val_arr = None
+        if Y_val is not None:
+            Y_val_arr = np.asarray(Y_val, dtype=np.float64)
+
         for epoch in range(1, epochs + 1):
             pred = self.forward(X)
             pred_arr = np.asarray(pred, dtype=np.float64)
@@ -107,8 +130,31 @@ class MLP:
             dY = (2.0 * diff / (n * m)).tolist()
             self.backward(dY)
             self.update(lr)
+
+            if X_val is not None and Y_val_arr is not None:
+                val_pred = self.forward(X_val)
+                val_pred_arr = np.asarray(val_pred, dtype=np.float64)
+                val_diff = val_pred_arr - Y_val_arr
+                val_n = val_pred_arr.shape[0]
+                val_loss = float((val_diff * val_diff).sum() / (val_n * m))
+                if val_loss < best_val:
+                    best_val = val_loss
+                    best_state = self._save_state()
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience is not None and patience_counter >= patience:
+                        if verbose:
+                            print(f"[mlp] epoch {epoch:4d}  mse = {loss:.6e}  "
+                                  f"(early stop, best val mse={best_val:.6e})")
+                        break
+
             if verbose and (epoch == 1 or epoch % 20 == 0 or epoch == epochs):
                 print(f"[mlp] epoch {epoch:4d}  mse = {loss:.6e}")
+
+        if best_state is not None:
+            self._load_state(best_state)
+
         return self
 
 

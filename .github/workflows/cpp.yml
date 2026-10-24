@@ -22,3 +22,19 @@ jobs:
         run: cmake --build build
       - name: Run GTests
         run: cd build && ctest --output-on-failure
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.2.0-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential cmake
+      - name: Configure CMake
+        run: |
+          cmake -B build -DBUILD_TESTING=ON -DCMAKE_CUDA_ARCHITECTURES=75 -DSKIP_CUDA_TESTS=OFF
+      - name: Build
+        run: cmake --build build

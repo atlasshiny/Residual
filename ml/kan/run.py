@@ -193,6 +193,16 @@ def run(args) -> tuple:
             f"test={len(X_test)})"
         )
 
+    # Split train into fit (gradient updates) + val (early stopping).
+    # Use a contiguous time block from the end of train so the val set
+    # simulates the extrapolation regime of the held-out test set.
+    val_fraction = 0.1
+    n_val = max(1, int(len(X_train) * val_fraction))
+    X_fit = X_train[:-n_val]
+    Y_fit = Y_train[:-n_val]
+    X_val = X_train[-n_val:]
+    Y_val = Y_train[-n_val:]
+
 
     n_features = len(X_train[0])
     out_dim = len(Y_train[0])
@@ -204,11 +214,14 @@ def run(args) -> tuple:
     # --- KAN ---
     kan = KAN([n_features, hidden, out_dim], num_basis=8, degree=3,
               grid_range=(-2.0, 2.0), standardize=True, l1=1e-4)
-    train(kan, X_train, Y_train, epochs=epochs, lr=lr, verbose=False)
+    patience = int(getattr(args, "patience", 20))
+    train(kan, X_fit, Y_fit, epochs=epochs, lr=lr, verbose=False,
+          X_val=X_val, Y_val=Y_val, patience=patience)
 
     # pruning + short retrain (matches original demo behaviour)
     kan.prune(1e-2)
-    train(kan, X_train, Y_train, epochs=20, lr=1e-2, verbose=False)
+    train(kan, X_fit, Y_fit, epochs=20, lr=1e-2, verbose=False,
+          X_val=X_val, Y_val=Y_val, patience=patience)
 
     kan_train_mse, kan_train_r2 = _eval(kan, X_train, Y_train)
     kan_test_mse, kan_test_r2 = _eval(kan, X_test, Y_test)
@@ -227,17 +240,20 @@ def run(args) -> tuple:
             })
 
     # --- MLP (standardise inputs on train stats) ---
-    x_mean_mlp = [sum(row[k] for row in X_train) / len(X_train) for k in range(n_features)]
+    x_mean_mlp = [sum(row[k] for row in X_fit) / len(X_fit) for k in range(n_features)]
     x_var_mlp = [0.0] * n_features
-    for row in X_train:
+    for row in X_fit:
         for k in range(n_features):
             x_var_mlp[k] += (row[k] - x_mean_mlp[k]) ** 2
-    x_std_mlp = [math.sqrt(v / len(X_train)) if v > 0.0 else 1.0 for v in x_var_mlp]
+    x_std_mlp = [math.sqrt(v / len(X_fit)) if v > 0.0 else 1.0 for v in x_var_mlp]
     x_std_mlp = [s if s > 1e-12 else 1.0 for s in x_std_mlp]
+    X_fit_mlp = [[(row[k] - x_mean_mlp[k]) / x_std_mlp[k] for k in range(n_features)] for row in X_fit]
+    X_val_mlp = [[(row[k] - x_mean_mlp[k]) / x_std_mlp[k] for k in range(n_features)] for row in X_val]
     X_train_mlp = [[(row[k] - x_mean_mlp[k]) / x_std_mlp[k] for k in range(n_features)] for row in X_train]
     X_test_mlp = [[(row[k] - x_mean_mlp[k]) / x_std_mlp[k] for k in range(n_features)] for row in X_test]
     mlp = MLP([n_features, 16, 8, out_dim], seed=0)
-    mlp.train(X_train_mlp, Y_train, epochs=200, lr=1e-2, verbose=False)
+    mlp.train(X_fit_mlp, Y_fit, epochs=200, lr=1e-2, verbose=False,
+              X_val=X_val_mlp, Y_val=Y_val, patience=patience)
     mlp_train_mse, mlp_train_r2 = _eval(mlp, X_train_mlp, Y_train)
     mlp_test_mse, mlp_test_r2 = _eval(mlp, X_test_mlp, Y_test)
 
