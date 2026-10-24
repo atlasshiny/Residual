@@ -1,6 +1,6 @@
 # Residual — Architecture
 
-A Rust orbital propagator that replays an Artemis/Orion trajectory, measures where physics diverges from reality, and uses a KAN to output a readable closed-form correction. **Cosmos 3** is the render-and-validate layer: it turns the physics into photoreal video and independently checks that the video still encodes the motion we gave it.
+A CUDA/C++ orbital propagator that replays an Artemis/Orion trajectory, measures where physics diverges from reality, and uses a KAN to output a readable closed-form correction. **Cosmos 3** is the render-and-validate layer: it turns the physics into photoreal video and independently checks that the video still encodes the motion we gave it.
 
 > **Status legend.** `[paper]` = stated in the Cosmos 3 technical report (arXiv 2606.02800v4, 23 Jun 2026). `[infer]` = our design decision or inference, needs testing. `[verify]` = must be confirmed against the repo, model card, or data source before relying on it.
 
@@ -68,18 +68,20 @@ If a judge swaps Cosmos 3 for an older video model, **inverse dynamics (job B be
 
 ## 4. Components
 
-### 4.1 Rust core (`crates/`)
+### 4.1 CUDA/C++ core (`src/kernels/`, with Rust helpers where useful)
 
-| Crate | Responsibility | Notes |
+The performance-critical propagator stays in CUDA/C++. Rust crates may still be used for lightweight helpers, schemas, or orchestration, but the authoritative numerical propagation is CUDA.
+
+| Component | Responsibility | Notes |
 |---|---|---|
-| `ingest` | Load SPICE kernels, mission files, telemetry | `anise` for SPICE `[verify]` crate coverage of the kernels you have |
-| `frames` | Time systems (UTC/TDB/ET), reference frames (ICRF, Moon-fixed, body frame) | Largest source of silent bugs; unit-test every transform |
-| `dynamics` | Earth/Moon/Sun n-body, lunar gravity harmonics, solar radiation pressure | FP64 throughout; adaptive Dormand–Prince |
+| `src/kernels/multibody_solver` | FP64 Earth/Moon n-body propagation | CUDA shared/static libraries; currently fixed-step velocity Verlet with optional J2 |
+| `ingest` (future) | Load SPICE kernels, mission files, telemetry | Python/Rust helper around data files; SPICE coverage `[verify]` |
+| `frames` | Time systems and reference frames | Largest source of silent bugs; unit-test every transform |
 | `residual` | Reference − propagated, burn masking, residual metric | Burn windows and attitude events must be masked or modeled |
 | `posebuilder` | State + pointing law → camera pose → ΔT sequence (§6) | Owns scale mapping `k` |
 | `evaluator` | Integrate recovered ΔT, Sim(3) align, compute errors | Same metrics as the paper `[paper]` |
-| `schema` | Vehicle and mission schemas (serde, JSON/YAML) | Stretch: "universal" spacecraft |
-| `ipc` | Tokio job queue, artifact manifest | Talks to Cosmos workers over files + a small RPC |
+| `schema` | Vehicle and mission schemas (serde/JSON/YAML) | Stretch: "universal" spacecraft |
+| `ipc` | Job queue and artifact manifest | Talks to Cosmos workers over files + a small RPC |
 
 Validation targets for `dynamics`: energy and angular-momentum conservation on a two-body case, then agreement with Horizons over a chosen arc. Separate integrator error from missing physics before handing residuals to the KAN.
 
@@ -243,7 +245,7 @@ residual/
 | Phase | Deliverable | Gate |
 |---|---|---|
 | 0 (first hours) | Confirm Artemis/Orion data, formats, release dates; confirm HPC access and weights staged | Go/no-go on data; fallback to other lunar trajectories in Horizons |
-| 1 | Propagator + frame tests + residual table | Matches Horizons within tolerance |
+| 1 | CUDA propagator + frame tests + residual table | Matches Horizons within tolerance |
 | 2 | KAN + baselines | Equation produced, comparison table |
 | 3 | Pose builder + control renderer + job A on one window | One transfer clip with correct geometry |
 | 4 | Jobs B and C + evaluator | First RRE/RTE/ATE numbers, `k` sweep |
@@ -254,7 +256,7 @@ residual/
 
 | Person | Owns |
 |---|---|
-| **1. Rust dynamics lead** | `dynamics`, `frames`, `ingest`, `posebuilder`, integrator tests |
+| **1. CUDA/physics lead** | `src/kernels`, `frames`, `ingest`, `posebuilder`, integrator tests |
 | **2. Data and validation lead** | Data sourcing, time systems, burn masking, `evaluator`, Horizons comparison |
 | **3. ML lead** | KAN, baselines, Cosmos job runner, SLURM scripts |
 | **4. Viz and demo lead** | Control renderer, UI, clip cache, fallback demo, slides |
