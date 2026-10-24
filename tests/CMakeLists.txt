@@ -1,5 +1,7 @@
-add_executable(multibody_test test_multibody.cpp)
-target_link_libraries(multibody_test PRIVATE multibody_solver GTest::gtest_main)
+if(NOT SKIP_CUDA_TESTS)
+    add_executable(multibody_test test_multibody.cpp)
+    target_link_libraries(multibody_test PRIVATE multibody_solver GTest::gtest_main)
 
-include(GoogleTest)
-gtest_discover_tests(multibody_test)
+    include(GoogleTest)
+    gtest_discover_tests(multibody_test)
+endif()
