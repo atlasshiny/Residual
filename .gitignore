@@ -1,11 +1,4 @@
-ml/kan/__pycache__/
-ml/kan/kan_result.json
-
-/build
-*__pycache__
-# Tauri build artifacts
-tauri-src/src-tauri/target/
-tauri-src/node_modules/
-tauri-src/src-tauri/gen/
-
-target/
+data/
+*.log
+*.tmp
+.env
