@@ -159,6 +159,13 @@ window.addEventListener("resize", resize);
 /* ---------------- data loading ---------------- */
 let trajectoryLoaded = false;
 let kanLoaded = false;
+let trajectoryFailed = false;
+let kanFailed = false;
+let settledCount = 0;
+function settle() {
+  settledCount++;
+  if (settledCount >= 2) setLoading(false);
+}
 
 async function loadTrajectory() {
   setDot(trajDot, "loading");
@@ -228,11 +235,14 @@ async function loadTrajectory() {
     stripMetrics.appendChild(buildStripCard("Trajectory samples", points.length, "amber"));
 
     trajectoryLoaded = true;
-    maybeFinishLoading();
+    sceneStatus.textContent = (trajectoryLoaded && kanLoaded) ? "Scene ready" : sceneStatus.textContent;
+    settle();
   } catch (error) {
     trajStatus.textContent = `Trajectory load failed: ${error.message}`;
     setDot(trajDot, "err");
+    trajectoryFailed = true;
     showError(`Trajectory load failed: ${error.message}`);
+    settle();
   }
 }
 
@@ -280,11 +290,14 @@ async function loadKanResult() {
     stripMetrics.appendChild(buildStripCard("Samples", data.n_samples ?? "—", ""));
 
     kanLoaded = true;
-    maybeFinishLoading();
+    sceneStatus.textContent = (trajectoryLoaded && kanLoaded) ? "Scene ready" : sceneStatus.textContent;
+    settle();
   } catch (error) {
     kanStatus.textContent = `KAN result load failed: ${error.message}`;
     setDot(kanDot, "err");
+    kanFailed = true;
     showError(`KAN result load failed: ${error.message}`);
+    settle();
   }
 }
 
