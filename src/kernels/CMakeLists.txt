@@ -1,7 +1,9 @@
 add_library(multibody_solver STATIC multibody_solver.cu)
 target_include_directories(multibody_solver PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(multibody_solver PUBLIC CUDA::cudart)
+if(NOT SKIP_CUDA_TESTS)
+    target_link_libraries(multibody_solver PUBLIC CUDA::cudart)
+endif()
 
 set_target_properties(multibody_solver PROPERTIES
     CXX_STANDARD 17
@@ -12,7 +14,9 @@ set_target_properties(multibody_solver PROPERTIES
 add_library(multibody_solver_shared SHARED multibody_solver.cu)
 target_include_directories(multibody_solver_shared PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(multibody_solver_shared PUBLIC CUDA::cudart)
+if(NOT SKIP_CUDA_TESTS)
+    target_link_libraries(multibody_solver_shared PUBLIC CUDA::cudart)
+endif()
 set_target_properties(multibody_solver_shared PROPERTIES
     OUTPUT_NAME multibody_solver_shared
     CXX_STANDARD 17

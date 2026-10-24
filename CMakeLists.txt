@@ -44,9 +44,8 @@ endif()
 
 if(NOT SKIP_CUDA_TESTS)
     find_package(CUDAToolkit REQUIRED)
+    add_subdirectory(src/kernels)
 endif()
-
-add_subdirectory(src/kernels)
 
 include(CTest)
 if(BUILD_TESTING)
