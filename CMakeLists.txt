@@ -2,6 +2,25 @@ cmake_minimum_required(VERSION 3.24)
 
 project(multibody_solver LANGUAGES CXX CUDA)
 
+include(FetchContent)
+
+# GoogleTest for the C++/CUDA test suite.
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+)
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+# Google Benchmark for future CUDA kernel benchmarking.
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    benchmark
+    URL https://github.com/google/benchmark/archive/refs/tags/v1.8.3.zip
+)
+FetchContent_MakeAvailable(benchmark)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -22,6 +41,10 @@ add_subdirectory(src/kernels)
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/CMakeLists.txt")
+    add_subdirectory(benchmarks)
 endif()
 
 # Optional host-side demo. Keep it out of the default build when src/main.cpp

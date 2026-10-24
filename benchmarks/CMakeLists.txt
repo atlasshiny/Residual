@@ -1,0 +1,2 @@
+add_executable(multibody_bench multibody_bench.cpp)
+target_link_libraries(multibody_bench PRIVATE multibody_solver benchmark::benchmark)

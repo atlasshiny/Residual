@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test clean
+.PHONY: all cuda rust python test tauri clean
 
 all: cuda rust python
 
@@ -8,6 +8,9 @@ cuda:
 
 rust:
 	@if [ -f Cargo.toml ]; then cargo build; else echo "No Cargo.toml found, skipping Rust build."; fi
+
+tauri:
+	cd tauri-src/src-tauri && cargo build
 
 python:
 	uv sync --extra dev --extra data
