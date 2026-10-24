@@ -1,4 +1,5 @@
 ml/kan/__pycache__/
 ml/kan/kan_result.json
 
+/build
 *__pycache__
