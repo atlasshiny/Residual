@@ -169,6 +169,19 @@ def run(args) -> tuple:
         times = [float(i) for i in range(len(X))]
         time_source = "index"
 
+    # Standardise targets to O(1) scale so the KAN/MLP/SINDy losses stay
+    # finite on residual tables whose magnitudes vary by many orders.
+    if X and Y:
+        n_t = len(Y[0])
+        y_mean = [sum(row[k] for row in Y) / len(Y) for k in range(n_t)]
+        y_std = [0.0] * n_t
+        for row in Y:
+            for k in range(n_t):
+                y_std[k] += (row[k] - y_mean[k]) ** 2
+        y_std = [math.sqrt(v / len(Y)) if v > 0.0 else 1.0 for v in y_std]
+        y_std = [s if s > 1e-12 else 1.0 for s in y_std]
+        Y = [[(row[k] - y_mean[k]) / y_std[k] for k in range(n_t)] for row in Y]
+
     n_samples_raw = len(X)
     masked_fraction = 0.0
     masked_samples = 0
