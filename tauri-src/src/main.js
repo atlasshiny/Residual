@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { settings, save, reset, pullFrom } from "./settings.js";
 
 /* ---------------- DOM refs ---------------- */
 const viewport = document.getElementById("viewport");
@@ -231,7 +232,11 @@ function fileError(prefix, path, error) {
 }
 
 async function loadTrajectory() {
-  const src = "./data/trajectory.json";
+  const src = settings.trajectoryPath || "./data/trajectory.json";
+  trajectoryLoaded = false;
+  const card = document.getElementById("trajectory-card");
+  card?.querySelectorAll(".fallback-note").forEach((n) => n.remove());
+  stripMetrics.querySelector('[data-strip="traj-samples"]')?.remove();
   setDot(trajDot, "loading");
   try {
     const response = await fetch(src);
@@ -302,7 +307,9 @@ async function loadTrajectory() {
     setDot(trajDot, "ok");
 
     // strip metric
-    stripMetrics.appendChild(buildStripCard("Trajectory samples", points.length, "amber"));
+    const stripCard = buildStripCard("Trajectory samples", points.length, "amber");
+    stripCard.dataset.strip = "traj-samples";
+    stripMetrics.prepend(stripCard);
 
     trajectoryLoaded = true;
     sceneStatus.textContent = (trajectoryLoaded && kanLoaded) ? "Scene ready" : sceneStatus.textContent;
@@ -320,7 +327,11 @@ async function loadTrajectory() {
 }
 
 async function loadKanResult() {
-  const src = "./data/kan_result.json";
+  const src = settings.kanPath || "./data/kan_result.json";
+  kanLoaded = false;
+  const card = document.getElementById("kan-card");
+  card?.querySelectorAll(".fallback-note").forEach((n) => n.remove());
+  stripMetrics.querySelectorAll('[data-strip="kan"]').forEach((n) => n.remove());
   setDot(kanDot, "loading");
   try {
     const response = await fetch(src);
@@ -364,10 +375,15 @@ async function loadKanResult() {
     setDot(kanDot, "ok");
 
     // strip metrics
-    stripMetrics.appendChild(buildStripCard("KAN R²", fmt(kan.train_r2, 4), "accent"));
-    stripMetrics.appendChild(buildStripCard("SINDy R²", fmt(sindy.train_r2, 4), "accent"));
-    stripMetrics.appendChild(buildStripCard("MLP R²", fmt(mlp.train_r2, 4), ""));
-    stripMetrics.appendChild(buildStripCard("Samples", data.n_samples ?? "—", ""));
+    [
+      buildStripCard("KAN R²", fmt(kan.train_r2, 4), "accent"),
+      buildStripCard("SINDy R²", fmt(sindy.train_r2, 4), "accent"),
+      buildStripCard("MLP R²", fmt(mlp.train_r2, 4), ""),
+      buildStripCard("Samples", data.n_samples ?? "—", ""),
+    ].forEach((c) => {
+      c.dataset.strip = "kan";
+      stripMetrics.appendChild(c);
+    });
 
     kanLoaded = true;
     sceneStatus.textContent = (trajectoryLoaded && kanLoaded) ? "Scene ready" : sceneStatus.textContent;
@@ -791,17 +807,17 @@ async function loadJobFromFiles(files) {
 
 async function loadDemoJob() {
   setCosmosDot("loading");
-  const base = "./data/demo_job/";
+  const base = settings.jobDir || "./data/demo_job/";
   try {
-    const job = await readJSON(null, base + "job.json");
-    const outputs = await readJSON(null, base + "sample_outputs.json");
+    const job = await readJSON(null, base + (base.endsWith("/") ? "" : "/") + "job.json");
+    const outputs = await readJSON(null, base + (base.endsWith("/") ? "" : "/") + "sample_outputs.json");
     let manifest = null;
-    try { manifest = await readJSON(null, base + "manifest.json"); } catch { /* demo manifest optional */ }
-    await applyCosmosJob({ job, outputs, manifest, dirURLBase: base });
+    try { manifest = await readJSON(null, base + (base.endsWith("/") ? "" : "/") + "manifest.json"); } catch { /* demo manifest optional */ }
+    await applyCosmosJob({ job, outputs, manifest, dirURLBase: base.endsWith("/") ? base : base + "/" });
   } catch (error) {
     setCosmosDot("err");
-    cosmosStatus.textContent = `Demo job unavailable — ${error.message}`;
-    showError(`Cosmos job: bundled demo missing (${error.message})`);
+    cosmosStatus.textContent = `Job unavailable — ${base} (${error.message})`;
+    showError(`Cosmos job: "${base}" missing or invalid (${error.message})`);
   }
 }
 
@@ -815,8 +831,8 @@ function updateViewForMode() {
     const show = el.dataset.modePanel === mode;
     el.classList.toggle("is-hidden", !show);
   });
-  trajGroup.visible = mode === "orbit";
-  cosmosGroup.visible = mode === "cosmos" && cosmos.poses.length > 0;
+  trajGroup.visible = mode === "orbit" && settings.showTrajectory;
+  cosmosGroup.visible = mode === "cosmos" && cosmos.poses.length > 0 && settings.showCosmosFrames;
   scrubber.classList.toggle("is-hidden", !(mode === "cosmos" && cosmos.loaded));
   if (mode !== "cosmos") frameRender.classList.add("is-hidden");
   else if (cosmos.loaded) updateFrameImage(cosmos.current);
@@ -871,6 +887,85 @@ resetViewBtn.addEventListener("click", () => {
   controls.update();
 });
 
+/* ---------------- settings modal ---------------- */
+const settingsOverlay = document.getElementById("settings-overlay");
+const openSettingsBtn = document.getElementById("open-settings");
+const settingsClose = document.getElementById("settings-close");
+const settingsResetBtn = document.getElementById("settings-reset");
+const reloadDataBtn = document.getElementById("reload-data-btn");
+const settingsSavedNote = document.getElementById("settings-saved");
+const playbackSpeedReadout = document.getElementById("playback-speed-readout");
+const settingFields = Array.from(document.querySelectorAll("[data-setting]"));
+
+function populateSettingsFields() {
+  for (const el of settingFields) {
+    const name = el.dataset.setting;
+    if (!(name in settings)) continue;
+    if (el.type === "checkbox") el.checked = Boolean(settings[name]);
+    else el.value = String(settings[name] ?? "");
+  }
+  if (playbackSpeedReadout) playbackSpeedReadout.textContent = `${settings.playbackSpeed}×`;
+}
+
+function applyDisplaySettings() {
+  document.body.classList.toggle("light", settings.theme === "light");
+  // re-evaluate trajectory / cosmos-frame visibility with the new flags
+  updateViewForMode();
+}
+
+let savedFlashTimer = null;
+function flashSaved() {
+  settingsSavedNote.classList.add("is-visible");
+  clearTimeout(savedFlashTimer);
+  savedFlashTimer = setTimeout(() => settingsSavedNote.classList.remove("is-visible"), 1600);
+}
+
+function openSettings() {
+  populateSettingsFields();
+  settingsOverlay.classList.remove("is-hidden");
+  settingsOverlay.querySelector(".settings-input")?.focus();
+}
+function closeSettings() {
+  settingsOverlay.classList.add("is-hidden");
+}
+
+openSettingsBtn.addEventListener("click", openSettings);
+settingsClose.addEventListener("click", closeSettings);
+settingsOverlay.addEventListener("click", (ev) => {
+  if (ev.target === settingsOverlay) closeSettings();
+});
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !settingsOverlay.classList.contains("is-hidden")) closeSettings();
+});
+
+/* live-apply + persist on any change (persist on <input> and <change> so
+   number fields with arrows and selects both behave) */
+settingsOverlay.addEventListener("input", (ev) => {
+  if (!pullFrom(ev.target)) return;
+  applyDisplaySettings();
+  save();
+  flashSaved();
+});
+settingsOverlay.addEventListener("change", (ev) => {
+  if (!pullFrom(ev.target)) return;
+  applyDisplaySettings();
+  save();
+  flashSaved();
+});
+
+settingsResetBtn.addEventListener("click", () => {
+  reset();
+  populateSettingsFields();
+  applyDisplaySettings();
+  flashSaved();
+});
+
+/* re-fetch trajectory / kan result from the configured paths */
+reloadDataBtn.addEventListener("click", () => {
+  loadTrajectory();
+  loadKanResult();
+});
+
 /* ---------------- animate ---------------- */
 function animate() {
   requestAnimationFrame(animate);
@@ -883,7 +978,7 @@ function animate() {
     const now = performance.now();
     const dt = Math.min((now - (cosmos.lastTick ?? now)) / 1000, 0.25);
     cosmos.lastTick = now;
-    cosmos.playAcc += dt * cosmos.fps;
+    cosmos.playAcc += dt * cosmos.fps * settings.playbackSpeed;
     while (cosmos.playAcc >= 1) {
       cosmos.playAcc -= 1;
       cosmos.current = (cosmos.current + 1) % cosmos.frames;
@@ -907,6 +1002,8 @@ loadDemoBtn.addEventListener("click", () => loadDemoJob());
 
 setLoading(true);
 sceneStatus.textContent = "Loading data…";
+populateSettingsFields();
+applyDisplaySettings();
 resize();
 updateViewForMode();
 animate();
