@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "tauri": "cargo tauri"
+    "tauri": "cargo tauri",
+    "ui-data": "uv run python ../scripts/make_ui_data.py",
+    "dev": "tauri dev",
+    "build": "tauri build"
   }
 }

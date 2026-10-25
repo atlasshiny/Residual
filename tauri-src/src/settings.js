@@ -7,6 +7,8 @@ export const DEFAULTS = Object.freeze({
   /* data source paths */
   trajectoryPath: "./data/trajectory.json",
   pinnPath: "./data/pinn_result.json",
+  predictionsPath: "./data/pinn_predictions.json",
+  manifestPath: "./data/manifest.json",
   jobDir: "./data/demo_job/",
 
   /* display */
