@@ -905,6 +905,52 @@ pub fn propagate_with(
     out
 }
 
+/// Propagate many independent states in place for `steps` fixed steps.
+///
+/// This is the batch counterpart to [`propagate`] and mirrors the CUDA kernel's
+/// in-place batch shape: every state is advanced independently with the same
+/// analytic ephemeris, burn window, and velocity-Verlet step, without
+/// allocating a trajectory per body. It is intended for ensemble, Monte Carlo,
+/// and benchmark workloads that only need final states.
+///
+/// # Panics
+///
+/// Debug builds assert that `config` passes [`Config::validate`] and that `dt`
+/// is finite and positive.
+pub fn propagate_batch_in_place(
+    states: &mut [State],
+    steps: impl IntoSteps,
+    dt: f64,
+    config: &Config,
+) {
+    let steps = steps.into_steps();
+    debug_assert!(
+        config.validate().is_ok(),
+        "invalid dynamics config: {:?}",
+        config.validate()
+    );
+    debug_assert!(dt.is_finite() && dt > 0.0, "dt must be finite and positive");
+    if steps == 0 || !dt.is_finite() || dt <= 0.0 {
+        return;
+    }
+
+    let system = System::new(config, &ANALYTIC);
+    for state in states.iter_mut() {
+        let mut s = *state;
+        let mut t = config.epoch;
+        for _ in 0..steps {
+            s.v = s.v.add(system.burn_dv_window(t, dt));
+            let a0 = system.acceleration(s.r, t);
+            s.v = s.v.add(a0.scale(0.5 * dt));
+            s.r = s.r.add(s.v.scale(dt));
+            let a1 = system.acceleration(s.r, t + dt);
+            s.v = s.v.add(a1.scale(0.5 * dt));
+            t += dt;
+        }
+        *state = s;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Adaptive Dormand-Prince (RK45 / DOPRI5) integrator.
 // ---------------------------------------------------------------------------
@@ -1449,6 +1495,44 @@ mod tests {
             assert!(s.r.x.is_finite() && s.r.y.is_finite() && s.r.z.is_finite());
             assert!(s.v.x.is_finite() && s.v.y.is_finite() && s.v.z.is_finite());
         }
+    }
+
+    #[test]
+    fn batch_in_place_matches_propagate() {
+        let cfg = Config {
+            perturbation: 1,
+            moon_phase: 0.75,
+            ..Config::default()
+        };
+        let states: Vec<State> = (0..8)
+            .map(|i| {
+                let r = 6.8e6 + 1.0e5 * f64::from(i % 4);
+                let v = (cfg.mu_earth / r).sqrt();
+                State {
+                    r: Vec3::new(r, 0.0, 0.0),
+                    v: Vec3::new(0.0, v, 0.0),
+                }
+            })
+            .collect();
+        let mut batch = states.clone();
+        propagate_batch_in_place(&mut batch, 50, cfg.dt, &cfg);
+
+        for (i, state) in states.iter().enumerate() {
+            let expected = propagate(*state, 50, cfg.dt, &cfg);
+            assert_eq!(batch[i], *expected.last().unwrap());
+        }
+    }
+
+    #[test]
+    fn batch_in_place_zero_steps_is_a_noop() {
+        let cfg = Config::default();
+        let state = State {
+            r: Vec3::new(7.0e6, 0.0, 0.0),
+            v: Vec3::new(0.0, 7.5e3, 0.0),
+        };
+        let mut states = [state];
+        propagate_batch_in_place(&mut states, 0, cfg.dt, &cfg);
+        assert_eq!(states[0], state);
     }
 
     fn circular_two_body(r0: f64) -> (Config, State, f64) {

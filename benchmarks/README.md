@@ -64,6 +64,38 @@ make bench-json BENCH_OUT=results/quick.json BENCH_MIN_TIME=0.2s
 `bench-build` builds only the benchmark target, so repeated runs skip
 reconfiguration work.
 
+## CUDA vs Rust
+
+`backend_bench.cpp` links the Rust `dynamics-bench` static library and runs the
+same batch shapes through both implementations:
+
+```sh
+make bench-backends
+make bench-backends BENCH_ARGS="--benchmark_filter=BM_BackendAgreement"
+make bench-backends BENCH_ARGS="--benchmark_format=json --benchmark_out=results/backends.json"
+```
+
+| Series | What it runs |
+|---|---|
+| `BM_CudaKernel` | `mbs_propagate_device` on resident device buffers, timed with CUDA events |
+| `BM_RustBatch` | `dynamics::propagate_batch_in_place` through the C ABI, timed with `steady_clock` |
+| `BM_BackendAgreement` | Both backends on the same states, reporting final-state differences |
+
+`BM_RustBatch` also calibrates the CUDA kernel for the same shape, so one row
+contains `cuda_ms_per_call`, `rust_ms_per_call`, `cuda_speedup`, and
+`particle_steps_per_s`. `BM_BackendAgreement` reports `max_pos_diff_m`,
+`rms_pos_diff_m`, and `max_vel_diff_m_s`.
+
+The Rust shim converts the flat C state array into `dynamics::State` values and
+back on every call. That conversion is included in the Rust time; for large
+batches the integrator dominates, while small batches show the FFI overhead.
+Both backends use the analytic circular ephemeris and the same burn-window
+rule, so the numerical comparison is meaningful.
+
+`backend_bench` is built only when CUDA is enabled and `cargo` is available. On
+the CUDA CI container the benchmark target is compiled; running it still needs
+a GPU.
+
 ## Case inventory
 
 | Benchmark | Arguments | Purpose |

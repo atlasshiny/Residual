@@ -10,6 +10,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamics-bench"
+version = "0.1.0"
+dependencies = [
+ "dynamics",
+]
+
+[[package]]
 name = "evaluator"
 version = "0.1.0"
 dependencies = [

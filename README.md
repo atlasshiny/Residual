@@ -153,6 +153,7 @@ The correction models currently train on one 30-day Moon arc and report a random
 | `make bench-trajectory` | Sustained trajectory-write series |
 | `make bench-burns` | Burn-count overhead series |
 | `make bench-timestep` | Step-size scaling series |
+| `make bench-backends` | Direct CUDA vs Rust comparison on identical states (requires CUDA + cargo) |
 
 Benchmarks use CUDA events and require the CUDA toolkit plus a GPU. Focused
 targets accept `BENCH_ARGS`, and `make bench` also accepts `BENCH_FILTER`; see

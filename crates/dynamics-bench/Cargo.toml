@@ -1,0 +1,12 @@
+[package]
+name = "dynamics-bench"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI wrapper for benchmarking the Rust dynamics propagator against CUDA"
+
+[lib]
+name = "dynamics_bench"
+crate-type = ["staticlib"]
+
+[dependencies]
+dynamics = { path = "../dynamics" }

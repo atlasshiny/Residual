@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench bench-build bench-quick bench-json bench-list bench-kernel bench-api bench-transfer bench-physics bench-trajectory bench-burns bench-timestep clean ui-data ensemble-data
+.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench bench-build bench-quick bench-json bench-list bench-kernel bench-api bench-transfer bench-physics bench-trajectory bench-burns bench-timestep backend-build bench-backends clean ui-data ensemble-data
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -171,6 +171,17 @@ bench-burns: bench
 
 bench-timestep: BENCH_FILTER = ^BM_PropagateKernelTimestep
 bench-timestep: bench
+
+# Direct CUDA vs Rust comparison.  Builds the Rust dynamics static library via
+# cargo, links it into backend_bench, then runs both backends on identical
+# states.  Requires CUDA and cargo.
+backend-build:
+	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+	cmake --build $(BUILD_DIR) -j --target backend_bench
+
+bench-backends: backend-build
+	mkdir -p results $(dir $(BENCH_OUT))
+	$(BUILD_DIR)/benchmarks/backend_bench $(BENCH_RUN_ARGS)
 
 # Full validation including the CUDA kernel and comparison tests.
 test-cuda:
