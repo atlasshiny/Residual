@@ -36,7 +36,12 @@ Dataset helpers:
 
 The run writes `pinn_result.json` with per-model train/test MSE and R² for the
 PINN, MLP, SINDy, and linear-regression models, plus the SINDy symbolic
-expression.
+expression. It also saves validation-selected PINN and MLP weights and
+preprocessing metadata in `pinn_models.pt`, per-row predictions from both
+models in `pinn_predictions.json`, and a compatible tabular CSV in
+`pinn_predictions.csv`. For standalone MLP use, it additionally writes
+`mlp_model.pt`, `mlp_predictions.json`, and `mlp_predictions.csv`.
+SINDy per-row outputs are written to `sindy_predictions.csv`.
 
 Notes:
 - The PINN requires PyTorch (`uv sync --extra gpu` or `pip install .[gpu]`).

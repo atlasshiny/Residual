@@ -2,6 +2,7 @@
 sparse regression.  Uses PyTorch for the MLP.
 """
 
+import copy
 from itertools import combinations_with_replacement
 
 import numpy as np
@@ -102,7 +103,7 @@ class MLP(nn.Module if HAS_TORCH else object):
                     v_loss = criterion(v_pred, Y_val_t)
                     if v_loss < best_val_loss:
                         best_val_loss = v_loss
-                        best_state = self.state_dict().copy()
+                        best_state = copy.deepcopy(self.state_dict())
                         patience_counter = 0
                     else:
                         patience_counter += 1
