@@ -91,6 +91,10 @@ def test_burn_mask_is_half_open():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("torch") is None,
+    reason="PyTorch not installed (needs --extra gpu)",
+)
 def test_synthetic_run_writes_test_metrics(tmp_path):
     out = tmp_path / "pinn_result.json"
     results, out_path = run(_parse(out))
@@ -106,6 +110,10 @@ def test_synthetic_run_writes_test_metrics(tmp_path):
             assert math.isfinite(data[model][key])
 
 
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("torch") is None,
+    reason="PyTorch not installed (needs --extra gpu)",
+)
 def test_run_applies_mission_burn_mask_before_training(tmp_path):
     mission = tmp_path / "mission.json"
     mission.write_text(
@@ -125,6 +133,10 @@ def test_run_applies_mission_burn_mask_before_training(tmp_path):
     assert _results["n_samples"] == 12
 
 
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("torch") is None,
+    reason="PyTorch not installed (needs --extra gpu)",
+)
 def test_run_uses_time_column_for_residual_table(tmp_path):
     pytest.importorskip("pandas")
     table = tmp_path / "residual.csv"
