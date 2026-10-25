@@ -189,7 +189,7 @@ def run(args) -> tuple:
         Y_pos_raw_train = [[0.0] * 3] * 12
         Y_pos_raw_test = [[0.0] * 3] * 2
         df_test = None
-        pos_cols = ["y"]
+        pos_cols = ["output_0", "output_1", "output_2"]
         feature_cols = "synthetic"
         masked_frac = 0.0
         scaler_pos = None
@@ -266,6 +266,105 @@ def run(args) -> tuple:
         None, None, mlp_test_target, predict=lambda _: mlp_test_pred_orig
     )
 
+    # Persist validation-selected checkpoints and predictions in source units.
+    # The checkpoint includes scaler and feature metadata needed to reproduce
+    # inference, not only bare state_dict tensors.
+    weights_path = Path(args.weights_out)
+    weights_path.parent.mkdir(parents=True, exist_ok=True)
+    import torch
+
+    torch.save(
+        {
+            "schema": "orbital-models/v1",
+            "pinn": {
+                "state_dict": pinn.state_dict(),
+                "n_features": 1,
+                "out_dim": out_dim,
+                "hidden_dims": [32, 32],
+            },
+            "mlp": {
+                "state_dict": mlp.state_dict(),
+                "dims": [n_features, 64, 32, out_dim],
+            },
+            "feature_columns": feature_cols,
+            "target_columns": pos_cols,
+            "time_column": time_col if df is not None else None,
+            "pinn_time_column": t_col if df is not None else None,
+            "scaler_pos": None
+            if scaler_pos is None
+            else {"mean": scaler_pos.mean_.tolist(), "scale": scaler_pos.scale_.tolist()},
+            "scaler_vel": None
+            if df is None
+            else {"mean": scaler_vel.mean_.tolist(), "scale": scaler_vel.scale_.tolist()},
+        },
+        weights_path,
+    )
+
+    if df is not None:
+        X_all, _ = build_xy(df, feature_cols=feature_cols, target_cols=pos_cols)
+        X_pinn_all = df[[t_col]].values.tolist()
+        pinn_all_scaled = pinn.forward(X_pinn_all)
+        mlp_all_scaled = np.asarray(mlp.forward(X_all))
+        pinn_all = scaler_pos.inverse_transform(pinn_all_scaled)
+        mlp_all = scaler_pos.inverse_transform(mlp_all_scaled)
+        prediction_times = [float(value) for value in df[time_col].tolist()]
+        actual_values = df[pos_cols].to_numpy(dtype=float)
+        has_source_data = True
+    else:
+        X_all = X_train
+        pinn_all = pinn.forward(X_pinn_train)
+        mlp_all = np.asarray(mlp.forward(X_all))
+        prediction_times = [float(index) for index in range(len(X_all))]
+        actual_values = np.asarray(Y_pos_raw_train, dtype=float)
+        has_source_data = False
+
+    prediction_rows = []
+    csv_rows = []
+    for row_idx in range(len(prediction_times)):
+        actual = {col: float(actual_values[row_idx, idx]) for idx, col in enumerate(pos_cols)}
+        pinn_values = {col: float(pinn_all[row_idx, idx]) for idx, col in enumerate(pos_cols)}
+        mlp_values = {col: float(mlp_all[row_idx, idx]) for idx, col in enumerate(pos_cols)}
+        prediction_rows.append(
+            {
+                "t": prediction_times[row_idx],
+                "actual": actual,
+                "pinn": pinn_values,
+                "mlp": mlp_values,
+            }
+        )
+        csv_row = {"t": prediction_times[row_idx], **actual}
+        for col in pos_cols:
+            csv_row[f"{col}_pred"] = pinn_values[col]
+            csv_row[f"{col}_mlp_pred"] = mlp_values[col]
+        if df is not None:
+            for col in ("dvx", "dvy", "dvz"):
+                if col in df.columns:
+                    csv_row[col] = float(df.iloc[row_idx][col])
+        csv_rows.append(csv_row)
+
+    predictions_path = Path(args.predictions_out)
+    predictions_path.parent.mkdir(parents=True, exist_ok=True)
+    with predictions_path.open("w", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "schema": "pinn-mlp-predictions/v1",
+                "data": str(args.data) if args.data else None,
+                "synthetic_demo": not has_source_data,
+                "time_column": time_col if has_source_data else "sample_index",
+                "target_columns": pos_cols,
+                "rows": prediction_rows,
+            },
+            stream,
+            indent=2,
+        )
+    csv_path = Path(args.predictions_csv_out)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df_predictions = df.__class__(csv_rows) if df is not None else __import__("pandas").DataFrame(csv_rows)
+    df_predictions.to_csv(csv_path, index=False)
+    print(f"Predictions JSON: {predictions_path}")
+    print(f"Predictions CSV:  {csv_path}")
+    print(f"Best model weights: {weights_path}")
+
     # --- SINDy ---
     sindy_deg = 1
     Xi, names, exprs = sindy(X_train, Y_pos_raw_train, degree=sindy_deg)
@@ -324,6 +423,7 @@ def run(args) -> tuple:
     }
 
     out_path = args.out or "ml/pinn/pinn_result.json"
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
 
@@ -352,6 +452,11 @@ def build_parser():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--out", default="ml/pinn/pinn_result.json")
+    parser.add_argument("--weights-out", default="ml/pinn/pinn_models.pt")
+    parser.add_argument("--predictions-out", default="ml/pinn/pinn_predictions.json")
+    parser.add_argument(
+        "--predictions-csv-out", default="ml/pinn/pinn_predictions.csv"
+    )
     return parser
 
 
