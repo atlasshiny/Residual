@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Cosmos 3 on HPC (4× B200)
 
 SLURM deployment for the Cosmos 3 render-and-validate layer described in
@@ -229,3 +230,97 @@ confirmed against your cluster and the Cosmos-Framework docs before a real run:
 scheduler, partition, GRES name, wall-time limits, GPU memory per device, and
 whether compute nodes have internet; the vLLM-Omni parallelism values for a
 4× B200 node; the image2video request field name; and the module names.
+=======
+# Cosmos3-Super on an 8-GPU B200 Slurm node
+
+This directory is a standalone HPC deployment path. It does not start or depend on the Reconix Electron application.
+
+It exposes two serving choices over the same Hugging Face checkpoint:
+
+- `reasoner`: vLLM OpenAI-compatible `/v1/chat/completions` for text/image/video understanding.
+- `omni`: vLLM-Omni OpenAI-compatible image/video generation APIs (`/v1/images/generations`, `/v1/videos/sync`).
+
+The Reasoner and Generator are different model towers. Pick a backend per Slurm job; do not try to run both in the same eight-GPU allocation.
+
+# One-time: choose where venvs, weights, and caches live.
+# Keep this OUTSIDE the git repo so big files never get committed.
+export COSMOS_ROOT="$HOME/cosmos3-data"
+mkdir -p "$COSMOS_ROOT"/{venvs,models,huggingface,uv-cache}
+export UV_CACHE_DIR="$COSMOS_ROOT/uv-cache"
+
+## Prerequisites
+
+1. Request and accept the Hugging Face access terms for `nvidia/Cosmos3-Super`. The Omni Generator keeps Cosmos safety guardrails enabled by default; accept access for `nvidia/Cosmos-1.0-Guardrail` as well.
+2. Use a CUDA 13.0 compatible driver/software environment on the B200 node. Build the serving environment on a compute node or a site-supported container; the frontend is for editing/submission, not model inference.
+3. Install a current Cosmos-compatible serving stack in a persistent virtual environment. Official recipes currently require native vLLM Cosmos 3 support for Reasoner and vLLM-Omni for Generator. Example starting points:
+
+   ```bash
+   # Reasoner environment
+  uv venv --python 3.13 "$COSMOS_ROOT/venvs/cosmos3-reasoner"
+  source "$COSMOS_ROOT/venvs/cosmos3-reasoner/bin/activate"
+  uv pip install --torch-backend=cu130 'vllm>=0.23.0' requests huggingface_hub
+
+  # Generator environment
+  uv venv --python 3.13 "$COSMOS_ROOT/venvs/cosmos3-omni"
+  source "$COSMOS_ROOT/venvs/cosmos3-omni/bin/activate"
+  uv pip install --torch-backend=cu130 \
+  'vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@main' \
+  requests huggingface_hub
+   ```
+
+   vLLM-Omni `main` is intentionally shown as a bring-up command, not a reproducible production pin. After the first successful run, pin the exact commit (or a tested site container digest) and record the Python/CUDA/driver versions.
+
+4. Store the HF token in the cluster's approved secret mechanism or export it in the submission shell. Do not put it in this repository, a Slurm script, or job output.
+
+## Stage the Hugging Face weights
+
+Run this in a job/environment that can reach Hugging Face and write to persistent storage:
+
+```bash
+source "$COSMOS_ROOT/venvs/cosmos3-omni/bin/activate"
+export HF_HOME="$COSMOS_ROOT/huggingface"
+python hpc/cosmos3/download_weights.py nvidia/Cosmos3-Super \
+  --local-dir "$COSMOS_ROOT/models/Cosmos3-Super"
+python hpc/cosmos3/download_weights.py nvidia/Cosmos-1.0-Guardrail \
+  --local-dir "$COSMOS_ROOT/models/Cosmos-1.0-Guardrail"
+```
+
+If the cluster compute nodes have no external network access, stage the snapshots from an approved transfer node first. Then run with `COSMOS_MODEL_PATH` set to the local snapshot directory and `HF_HUB_OFFLINE=1`. Keep `HF_HOME` on persistent storage so a job restart does not repeat the large download.
+
+## Submit
+
+Site partition and account names differ, so supply them at submission time rather than hardcoding one cluster's names:
+
+```bash
+export HPC_PARTITION=longq7-dgxb200
+export COSMOS_VENV="$COSMOS_ROOT/venvs/cosmos3-omni"
+export HF_HOME="$COSMOS_ROOT/huggingface"
+export COSMOS_MODEL_PATH="$COSMOS_ROOT/models/Cosmos3-Super"
+export HF_TOKEN=<read-token-from-your-secret-store>
+export COSMOS_PORT=8000
+
+bash hpc/cosmos3/submit.sh omni
+# or, in a separate allocation/environment:
+bash hpc/cosmos3/submit.sh reasoner
+```
+
+The submit wrapper requests one node and eight B200 GPUs with `--gres=gpu:b200:8`. Override `GPU_GRES` if the site uses a different GRES spelling, for example `gpu:8`. The batch job runs the server in the foreground so Slurm owns its lifetime and terminates all ranks when the allocation ends.
+
+The Omni launch uses NVIDIA's documented 8-GPU topology: CFG parallel size 2, Ulysses degree 4, and HSDP shard size 8. Initialization can take several minutes; `--init-timeout 1800` is set. Guardrails remain enabled.
+
+The Reasoner uses the unified `nvidia/Cosmos3-Super` checkpoint with the Reasoner architecture override and TP=8. Set `COSMOS_TP_SIZE=4` to test the documented four-GPU model-card topology; that requires changing the Slurm request to four GPUs (or changing the launcher to use another parallelism layout).
+
+## Call the server
+
+By default, the service binds to loopback on the allocated node. Use the cluster-approved SSH tunnel or forwarding method to reach it from your workstation. If your site's internal routing requires binding to a non-loopback interface, set `COSMOS_HOST=0.0.0.0` and a strong `COSMOS_API_KEY`; the launcher refuses a non-loopback bind without an API key. Do not publish the port to the public network. From a shell on the compute node:
+
+```bash
+# Smoke test
+python hpc/cosmos3/smoke.py --backend omni --output "$COSMOS_ROOT/cosmos-smoke.mp4"
+python hpc/cosmos3/smoke.py --backend reasoner
+```
+
+The Omni smoke request follows NVIDIA's Cosmos3-Super example settings (720p, 189 frames, 35 steps), so it is a real generation workload and may take a few minutes. The Reasoner smoke request checks a text completion; use the official vLLM Cosmos 3 sample for image/video inputs.
+
+Logs are written under `hpc/cosmos3/logs/`. Cancel the job with `scancel <job-id>`; Slurm then tears down the foreground server and its distributed workers.
+>>>>>>> 5426358 (directions for cosmos on hpc)
