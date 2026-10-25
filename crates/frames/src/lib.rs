@@ -209,14 +209,7 @@ impl Epoch {
         let minute = ((day_seconds - hour as f64 * 3_600.0) / 60.0).floor() as u32;
         let second = day_seconds - hour as f64 * 3_600.0 - minute as f64 * 60.0;
 
-        (
-            year as i32,
-            month as u32,
-            day as u32,
-            hour,
-            minute,
-            second,
-        )
+        (year as i32, month as u32, day as u32, hour, minute, second)
     }
 }
 

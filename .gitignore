@@ -43,4 +43,5 @@ __pycache__/
 # Ignore specific files if they exist
 *.csv
 *.json
-*.txt*.pt
+*.txt
+*.pt
