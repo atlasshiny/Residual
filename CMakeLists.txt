@@ -10,8 +10,6 @@ else()
 
     find_package(CUDAToolkit QUIET)
 
-    set(CMAKE_CUDA_ARCHITECTURES native)
-
     enable_language(CUDA)
 endif()
 
