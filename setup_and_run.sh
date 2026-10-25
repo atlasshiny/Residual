@@ -17,18 +17,22 @@ cd "$SCRIPT_DIR"
 SKIP_FETCH=false
 RUN_TESTS=false
 GPU=false
+USE_SPICE=false
 
 for arg in "$@"; do
     case "$arg" in
         --skip-fetch) SKIP_FETCH=true ;;
         --test)       RUN_TESTS=true ;;
         --gpu)        GPU=true ;;
+        --spice)      USE_SPICE=true ;;
         --help|-h)
-            echo "Usage: $0 [--skip-fetch] [--test] [--gpu]"
+            echo "Usage: $0 [--skip-fetch] [--test] [--gpu] [--spice]"
             echo ""
-            echo "  --skip-fetch  Skip JPL Horizons data fetch (use existing data/)"
+            echo "  --skip-fetch  Skip data fetch (use existing data/)"
             echo "  --test        Run test suite after pipeline"
             echo "  --gpu         Install PyTorch GPU extras (for PINN/MLP training)"
+            echo "  --spice       Fetch reference data from SPICE kernels instead of Horizons"
+            echo "                (requires --extra spice and SPICE_KERNELS env var)"
             exit 0
             ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
@@ -38,6 +42,7 @@ done
 # PyTorch is required by the PINN/MLP training step (step 5), so the gpu
 # extra is included by default. --gpu is kept for backwards compatibility.
 EXTRAS="dev,data,gpu"
+if $USE_SPICE; then EXTRAS="$EXTRAS,spice"; fi
 
 echo "============================================================"
 echo "  GatorHacks-V: Setup & Pipeline"
@@ -65,9 +70,15 @@ fi
 
 # --- 3. Fetch reference data ---
 if ! $SKIP_FETCH; then
-    echo ""
-    echo "[3/5] Fetching JPL Horizons reference data..."
-    make fetch-data
+    if $USE_SPICE; then
+        echo ""
+        echo "[3/5] Fetching SPICE ephemeris reference data..."
+        make fetch-spice
+    else
+        echo ""
+        echo "[3/5] Fetching JPL Horizons reference data..."
+        make fetch-data
+    fi
 else
     echo ""
     echo "[3/5] Skipping data fetch (--skip-fetch)."

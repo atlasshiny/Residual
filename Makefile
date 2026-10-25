@@ -1,9 +1,14 @@
-.PHONY: all cuda rust python test fetch-data residual train test-cpu test-cuda tauri bench clean
+.PHONY: all cuda rust python test fetch-data fetch-spice residual train test-cpu test-cuda tauri bench clean
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
 HORIZONS_ARGS ?=
 CONVERT_ARGS ?=
+SPICE_START ?= 2022-08-01
+SPICE_STOP ?=
+SPICE_STEP ?= 600
+SPICE_MODE ?= moon
+SPICE_ARGS ?=
 DATA ?= data/residual_table.csv
 ARGS ?= $(if $(wildcard $(DATA)),--data $(DATA),)
 BENCH_ARGS ?= --benchmark_min_time=1s
@@ -30,6 +35,16 @@ python:
 fetch-data:
 	uv run --extra data python scripts/fetch_horizons.py $(HORIZONS_ARGS)
 	uv run --extra data python scripts/convert_reference.py $(CONVERT_ARGS)
+
+# Fetch an ephemeris arc from SPICE kernels (offline) and convert it.
+# Requires `uv sync --extra spice` and SPICE_KERNELS (or --kernel).
+#   make fetch-spice SPICE_START="2022-08-01" SPICE_STOP="2022-09-01" SPICE_STEP=3600
+fetch-spice:
+	uv run --extra spice python scripts/fetch_spice.py \
+	  --start "$(SPICE_START)" $(if $(SPICE_STOP),--stop "$(SPICE_STOP)",) \
+	  --step $(SPICE_STEP) $(SPICE_ARGS)
+	uv run --extra data python scripts/convert_reference.py \
+	  --raw data/raw_spice.csv --mode $(SPICE_MODE) $(CONVERT_ARGS)
 
 # Reference trajectory -> residual table (dr, dv per sample).
 data/reference.csv:

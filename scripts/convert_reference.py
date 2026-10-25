@@ -150,7 +150,7 @@ def load_raw(path: Path) -> tuple[pd.DataFrame, float]:
 
 
 def to_solver_frame(
-    raw: pd.DataFrame, preserve_distance: bool, align: bool
+    raw: pd.DataFrame, preserve_distance: bool, align: bool, mode: str = "moon"
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """Convert km / km-s geocentric vectors to barycentric SI states."""
     fraction_moon = MU_MOON / TOTAL_MU
@@ -174,32 +174,37 @@ def to_solver_frame(
             raise RuntimeError("raw position vector has zero or non-finite length")
         raw_separations.append(separation)
 
-        if not preserve_distance:
-            # Scale the whole state so the reference matches the propagator's
-            # nominal circular separation.  Scaling r and v by the same factor
-            # preserves the osculating orbit shape.
-            factor = EARTH_MOON_DISTANCE / separation
-            position = _scale(position, factor)
-            velocity = _scale(velocity, factor)
+        if mode == "moon":
+            if not preserve_distance:
+                # Scale the whole state so the reference matches the propagator's
+                # nominal circular separation.  Scaling r and v by the same factor
+                # preserves the osculating orbit shape.
+                factor = EARTH_MOON_DISTANCE / separation
+                position = _scale(position, factor)
+                velocity = _scale(velocity, factor)
 
-        # Barycentric split: earth = -D * mu_moon / total_mu,
-        # moon = +D * mu_earth / total_mu, with D the separation vector.
-        earth_position = _scale(position, -fraction_moon)
-        moon_position = _scale(position, fraction_earth)
-        moon_velocity = _scale(velocity, fraction_earth)
+            # Barycentric split: earth = -D * mu_moon / total_mu,
+            # moon = +D * mu_earth / total_mu, with D the separation vector.
+            earth_position = _scale(position, -fraction_moon)
+            moon_position = _scale(position, fraction_earth)
+            moon_velocity = _scale(velocity, fraction_earth)
 
-        # Mass-weighted centre of mass must stay at the barycentre.  The raw
-        # positions do not sum to zero because the Earth and Moon have very
-        # different masses.
-        weighted = tuple(
-            MU_EARTH * earth_position[axis] + MU_MOON * moon_position[axis]
-            for axis in range(3)
-        )
-        if _norm(weighted) > 1.0e-9 * TOTAL_MU * _norm(position):
-            raise RuntimeError(
-                "barycentric split did not cancel to the origin; check the "
-                "gravitational parameters"
+            # Mass-weighted centre of mass must stay at the barycentre.
+            weighted = tuple(
+                MU_EARTH * earth_position[axis] + MU_MOON * moon_position[axis]
+                for axis in range(3)
             )
+            if _norm(weighted) > 1.0e-9 * TOTAL_MU * _norm(position):
+                raise RuntimeError(
+                    "barycentric split did not cancel to the origin; check the "
+                    "gravitational parameters"
+                )
+        else:
+            # Generic body: keep the state as-is (already in the chosen frame).
+            moon_position = position
+            moon_velocity = velocity
+            if not preserve_distance:
+                pass
 
         times.append(float(row.t))
         moon_positions.append(moon_position)
@@ -283,7 +288,7 @@ def build_manifest(
     meta: dict[str, object],
 ) -> dict[str, object]:
     source = {
-        "provider": "JPL Horizons (NASA/JPL Solar System Dynamics)",
+        "provider": meta.get("provider", "JPL Horizons (NASA/JPL Solar System Dynamics)"),
         "target": meta.get("target", "301 (Moon)"),
         "center": meta.get("center", "500@399 (Earth body centre)"),
         "api_url": meta.get("api_url"),
@@ -387,6 +392,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="do not rotate the arc into the solver's +x/+z orientation",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("moon", "generic"),
+        default="moon",
+        help="conversion mode: 'moon' (geocentric Moon -> barycentric solver "
+        "frame, default) or 'generic' (arbitrary body, unit conversion only)",
+    )
     return parser.parse_args(argv)
 
 
@@ -402,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
             raw,
             preserve_distance=args.preserve_distance,
             align=not args.no_align,
+            mode=args.mode,
         )
         meta = load_sidecar_meta(raw_path)
         manifest = build_manifest(
