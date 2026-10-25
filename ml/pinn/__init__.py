@@ -11,6 +11,7 @@ from .baselines import (
 from .baselines import mse as baseline_mse
 from .pinn import PINN, train_pinn
 from .kan import KAN, KANLayer, PolynomialFit, export_results, mse, r2_score, train
+from .run import apply_burn_mask, build_parser, burn_keep_mask, run
 
 __all__ = [
     "KAN",
@@ -29,4 +30,8 @@ __all__ = [
     "sindy",
     "sindy_predict",
     "train",
+    "apply_burn_mask",
+    "build_parser",
+    "burn_keep_mask",
+    "run",
 ]

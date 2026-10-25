@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from ml.pinn import PINN, SINDyLayer, PolynomialFit, export_results, mse, r2_score, train
+from ml.pinn import PINN, PolynomialFit, export_results, mse, r2_score, train
 from ml.kan.kan import _bspline_basis, _bspline_knots, _solve_linear
 
 
