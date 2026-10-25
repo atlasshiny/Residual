@@ -21,20 +21,21 @@ __global__ void __launch_bounds__(MBS_THREADS_PER_BLOCK)
 multibody_kernel(MbsState* __restrict__ states, int num_bodies, int num_steps,
                  MbsConfig config, MbsState* __restrict__ trajectory) {
     const int stride = blockDim.x * gridDim.x;
+    const MbsConfig& cfg = *config;
 
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < num_bodies;
          i += stride) {
         // Keep the particle state in registers across the time loop.
         MbsState state = states[i];
-        double t = config.epoch;
+        double t = cfg.epoch;
 
         // Burns are scheduled on integration steps.  Precompute the nearest
         // step once per particle so the hot loop avoids a floating-point
         // comparison against every burn on every step.
         int burn_steps[8];
-        for (int b = 0; b < config.num_burns && b < 8; ++b) {
+        for (int b = 0; b < cfg.num_burns && b < 8; ++b) {
             burn_steps[b] = static_cast<int>(std::llround(
-                (config.burns[b].t - config.epoch) / config.dt));
+                (cfg.burns[b].t - cfg.epoch) / cfg.dt));
         }
 
         if (trajectory != nullptr) {
@@ -43,16 +44,16 @@ multibody_kernel(MbsState* __restrict__ states, int num_bodies, int num_steps,
 
         for (int step = 0; step < num_steps; ++step) {
             // Apply impulsive burns firing at this step's start time.
-            for (int b = 0; b < config.num_burns && b < 8; ++b) {
+            for (int b = 0; b < cfg.num_burns && b < 8; ++b) {
                 if (step == burn_steps[b] &&
-                    std::fabs(t - config.burns[b].t) < 0.5 * config.dt) {
-                    state.v.x += config.burns[b].dvx;
-                    state.v.y += config.burns[b].dvy;
-                    state.v.z += config.burns[b].dvz;
+                    std::fabs(t - cfg.burns[b].t) < 0.5 * cfg.dt) {
+                    state.v.x += cfg.burns[b].dvx;
+                    state.v.y += cfg.burns[b].dvy;
+                    state.v.z += cfg.burns[b].dvz;
                 }
             }
-            mbs::velocity_verlet_step(state, t, config.dt, config);
-            t = config.epoch + static_cast<double>(step + 1) * config.dt;
+            mbs::velocity_verlet_step(state, t, cfg.dt, cfg);
+            t = cfg.epoch + static_cast<double>(step + 1) * cfg.dt;
 
             if (trajectory != nullptr) {
                 // Layout is [frame][body], so frames stay contiguous.
@@ -219,7 +220,7 @@ int mbs_propagate(const MbsState* __restrict__ initial_states, int num_bodies, i
     // One thread per particle; the grid-stride loop covers larger batches.
     const int blocks = MBS_BLOCKS_FOR(num_bodies);
 
-    multibody_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states.data, num_bodies, num_steps, *config, trajectory != nullptr ? device_trajectory.data : nullptr);
+    multibody_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states.data, num_bodies, num_steps, config, trajectory != nullptr ? device_trajectory.data : nullptr);
 
     // Surface launch errors before attempting the device-to-host copies.
     MBS_CUDA_CHECK(cudaGetLastError());
@@ -248,7 +249,7 @@ int mbs_propagate_device(MbsState* __restrict__ device_states, int num_bodies, i
 
     // Drop any sticky error left by the caller so it is not attributed here.
     cudaGetLastError();
-    multibody_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states, num_bodies, num_steps, *config, device_trajectory);
+    multibody_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states, num_bodies, num_steps, config, device_trajectory);
     return static_cast<int>(cudaGetLastError());
 }
 
@@ -285,13 +286,26 @@ __device__ void atomic_max_double(double* address, double value) {
 // One block cooperatively loads a tile of particles into shared memory, then
 // each thread accumulates the contribution of its assigned particle.  The
 // tile keeps the global loads coalesced and gives the reduction a bounded
-// working set; atomics combine the per-block partial results.
+// working set; a block-level reduction leaves one atomic update per block.
 __global__ void __launch_bounds__(MBS_THREADS_PER_BLOCK)
 ensemble_stats_kernel(const MbsState* __restrict__ states, int num_bodies,
                       MbsEnsembleStats* __restrict__ stats) {
     __shared__ MbsState tile[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_sx[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_sy[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_sz[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_svx[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_svy[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_svz[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_sr2[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_sv2[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_min[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_max[MBS_ENSEMBLE_TILE_SIZE];
+    __shared__ double block_has[MBS_ENSEMBLE_TILE_SIZE];
 
     const int tid = threadIdx.x;
+    const double infinity = std::numeric_limits<double>::infinity();
+
     double sx = 0.0;
     double sy = 0.0;
     double sz = 0.0;
@@ -300,9 +314,9 @@ ensemble_stats_kernel(const MbsState* __restrict__ states, int num_bodies,
     double svz = 0.0;
     double sr2 = 0.0;
     double sv2 = 0.0;
-    double min_r2 = 0.0;
-    double max_r2 = 0.0;
-    bool has_particle = false;
+    double min_r2 = infinity;
+    double max_r2 = -infinity;
+    double has_particle = 0.0;
 
     for (int tile_start = 0; tile_start < num_bodies; tile_start += MBS_ENSEMBLE_TILE_SIZE) {
         const int index = tile_start + tid;
@@ -325,31 +339,59 @@ ensemble_stats_kernel(const MbsState* __restrict__ states, int num_bodies,
             svz += state.v.z;
             sr2 += r2;
             sv2 += v2;
-
-            if (!has_particle) {
-                min_r2 = r2;
-                max_r2 = r2;
-                has_particle = true;
-            } else {
-                min_r2 = (r2 < min_r2) ? r2 : min_r2;
-                max_r2 = (r2 > max_r2) ? r2 : max_r2;
-            }
+            min_r2 = (has_particle == 0.0 || r2 < min_r2) ? r2 : min_r2;
+            max_r2 = (has_particle == 0.0 || r2 > max_r2) ? r2 : max_r2;
+            has_particle = 1.0;
         }
         __syncthreads();
     }
 
-    if (has_particle) {
-        atomicAdd(&stats->sum_x, sx);
-        atomicAdd(&stats->sum_y, sy);
-        atomicAdd(&stats->sum_z, sz);
-        atomicAdd(&stats->sum_vx, svx);
-        atomicAdd(&stats->sum_vy, svy);
-        atomicAdd(&stats->sum_vz, svz);
-        atomicAdd(&stats->sum_r2, sr2);
-        atomicAdd(&stats->sum_v2, sv2);
-        atomicAdd(&stats->count, 1);
-        atomic_min_double(&stats->min_r2, min_r2);
-        atomic_max_double(&stats->max_r2, max_r2);
+    block_sx[tid] = sx;
+    block_sy[tid] = sy;
+    block_sz[tid] = sz;
+    block_svx[tid] = svx;
+    block_svy[tid] = svy;
+    block_svz[tid] = svz;
+    block_sr2[tid] = sr2;
+    block_sv2[tid] = sv2;
+    block_min[tid] = has_particle ? min_r2 : infinity;
+    block_max[tid] = has_particle ? max_r2 : -infinity;
+    block_has[tid] = has_particle;
+    __syncthreads();
+
+    for (int stride = MBS_ENSEMBLE_TILE_SIZE / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            block_sx[tid] += block_sx[tid + stride];
+            block_sy[tid] += block_sy[tid + stride];
+            block_sz[tid] += block_sz[tid + stride];
+            block_svx[tid] += block_svx[tid + stride];
+            block_svy[tid] += block_svy[tid + stride];
+            block_svz[tid] += block_svz[tid + stride];
+            block_sr2[tid] += block_sr2[tid + stride];
+            block_sv2[tid] += block_sv2[tid + stride];
+            block_min[tid] = (block_min[tid + stride] < block_min[tid])
+                                 ? block_min[tid + stride]
+                                 : block_min[tid];
+            block_max[tid] = (block_max[tid + stride] > block_max[tid])
+                                 ? block_max[tid + stride]
+                                 : block_max[tid];
+            block_has[tid] += block_has[tid + stride];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0 && block_has[0] > 0.0) {
+        atomicAdd(&stats->sum_x, block_sx[0]);
+        atomicAdd(&stats->sum_y, block_sy[0]);
+        atomicAdd(&stats->sum_z, block_sz[0]);
+        atomicAdd(&stats->sum_vx, block_svx[0]);
+        atomicAdd(&stats->sum_vy, block_svy[0]);
+        atomicAdd(&stats->sum_vz, block_svz[0]);
+        atomicAdd(&stats->sum_r2, block_sr2[0]);
+        atomicAdd(&stats->sum_v2, block_sv2[0]);
+        atomicAdd(&stats->count, static_cast<int>(block_has[0]));
+        atomic_min_double(&stats->min_r2, block_min[0]);
+        atomic_max_double(&stats->max_r2, block_max[0]);
     }
 }
 

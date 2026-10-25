@@ -121,8 +121,9 @@ MBS_DEVICE_INLINE void earth_moon_positions(double t, const MbsConfig& config, M
     const double moon_fraction =
         (total_mu > 0.0) ? (config.mu_moon / total_mu) : 0.0;
 
-    const double c = cos(theta);
-    const double s = sin(theta);
+    double s = 0.0;
+    double c = 0.0;
+    sincos(theta, &s, &c);
 
     earth = {-config.moon_distance * moon_fraction * c,
              -config.moon_distance * moon_fraction * s, 0.0};
