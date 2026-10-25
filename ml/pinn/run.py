@@ -38,6 +38,27 @@ def _parse_cols(value):
     return [c.strip() for c in value.split(",") if c.strip()]
 
 
+def _fit_width(values, width):
+    """Zero-pad (or truncate) the last axis of ``values`` to ``width`` columns.
+
+    The PINN predicts a residual trajectory whose time-derivative is the
+    velocity residual, so the supervised position targets must share the
+    dimensionality of the velocity targets. When fewer position targets are
+    selected than velocity components, the missing axes are zero-padded (a
+    standardized zero means "leave this residual component unconstrained").
+    """
+    values = np.asarray(values, dtype=float)
+    if values.ndim == 1:
+        values = values.reshape(-1, 1)
+    n_cols = values.shape[1]
+    if n_cols == width:
+        return values
+    if n_cols > width:
+        return values[:, :width]
+    pad = np.zeros((values.shape[0], width - n_cols), dtype=float)
+    return np.concatenate([values, pad], axis=1)
+
+
 def load_mission(path):
     with open(path, "r", encoding="utf-8") as fh:
         raw = json.load(fh)
@@ -98,7 +119,10 @@ def run(args) -> tuple:
 
         # Target selection
         pos_cols = _parse_cols(args.targets) if args.targets else ["drx", "dry", "drz"]
-        vel_cols = ["dvx", "dvy", "dvz"]
+        # Match velocity target width to the position target width so the PINN's
+        # out_dim (derived from pos_cols) agrees with the velocity targets during
+        # training. E.g. --targets y -> pos_cols has 1 col -> vel_cols = ["dvx"].
+        vel_cols = ["dvx", "dvy", "dvz"][: len(pos_cols)]
 
         # Temporal Split
         test_fraction = float(args.test_fraction)
