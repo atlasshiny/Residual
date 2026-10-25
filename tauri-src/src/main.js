@@ -96,6 +96,7 @@ let orbitMarker = null;
 let trajectoryData = null;
 let trajRadius = 0;
 let orbitPlane = null;
+let ensembleEpoch = -1;
 const resetViewBtn = document.getElementById("reset-view");
 
 /* cosmos viewer */
@@ -365,6 +366,7 @@ async function loadTrajectory() {
   }
   ensemblePoints = null;
   orbitMarker = null;
+  ensembleEpoch = -1;
   setDot(trajDot, "loading");
   try {
     const response = await fetch(src);
@@ -494,7 +496,7 @@ async function loadTrajectory() {
     trajectoryLoaded = true;
     fitCameraToTrajectory(maxR);
     sceneStatus.textContent = (trajectoryLoaded && pinnLoaded) ? "Scene ready" : sceneStatus.textContent;
-    drawGuide(0);
+    setOrbitIndex(0);
     settle();
   } catch (error) {
     const message = fileError("Trajectory data unavailable", src, error);
@@ -605,22 +607,82 @@ async function loadEnsemble() {
     ensembleData = await res.json();
     if (ensembleSlider && ensembleData.n_epochs) {
       ensembleSlider.max = String(ensembleData.n_epochs - 1);
-      ensembleSlider.value = "0";
     }
-    renderEnsembleEpoch(0);
+    const idx = parseInt(orbitSlider?.value || "0", 10) || 0;
+    const epoch = ensembleEpochForOrbitIndex(idx);
+    if (ensembleSlider) ensembleSlider.value = String(epoch);
+    renderEnsembleEpoch(epoch, { force: true });
   } catch (e) {
     ensembleData = null;
   }
 }
 
-function renderEnsembleEpoch(idx) {
-  if (ensemblePoints) { trajGroup.remove(ensemblePoints); ensemblePoints.geometry?.dispose(); ensemblePoints.material?.dispose(); ensemblePoints = null; }
+/* The ensemble artifact covers 61 epochs over 10 hours, while the reference
+   arc covers 30 days.  They cannot share wall-clock time, so the cloud is
+   driven by trajectory *progress*: as the main arc runs from sample 0 to the
+   last sample, the cloud runs from epoch 0 to the final epoch.  That keeps the
+   two animations locked together for the whole playback loop. */
+function ensembleEpochCount() {
+  const n = ensembleData?.clouds?.length ?? ensembleData?.n_epochs ?? 0;
+  return Math.max(0, n - 1);
+}
+
+function ensembleEpochForOrbitIndex(idx) {
+  const last = ensembleEpochCount();
+  const n = trajectoryData?.points?.length ?? 0;
+  if (!last || n < 2) return 0;
+  const progress = Math.max(0, Math.min(1, idx / (n - 1)));
+  return Math.round(progress * last);
+}
+
+function orbitIndexForEnsembleEpoch(epoch) {
+  const last = ensembleEpochCount();
+  const n = trajectoryData?.points?.length ?? 0;
+  if (!last || n < 2) return 0;
+  const progress = Math.max(0, Math.min(1, epoch / last));
+  return Math.round(progress * (n - 1));
+}
+
+function syncEnsembleToOrbit(idx) {
   if (!ensembleData) return;
+  const epoch = ensembleEpochForOrbitIndex(idx);
+  if (ensembleSlider) ensembleSlider.value = String(epoch);
+  renderEnsembleEpoch(epoch);
+}
+
+function ensembleRmsKm(epoch) {
+  const cloud = ensembleData?.clouds?.[epoch];
+  const nominal = ensembleData?.nominal?.[epoch];
+  if (Array.isArray(cloud) && Array.isArray(nominal) && cloud.length) {
+    let sum = 0;
+    for (let i = 0; i < cloud.length; i++) {
+      const dx = cloud[i][0] - nominal[0];
+      const dy = cloud[i][1] - nominal[1];
+      const dz = cloud[i][2] - nominal[2];
+      sum += dx * dx + dy * dy + dz * dz;
+    }
+    return Math.sqrt(sum / (cloud.length * 3)) / 1000;
+  }
   // stats[i] describes the cloud after step i, i.e. epoch i+1.
-  const st = idx > 0 ? ensembleData.stats?.[idx - 1] : null;
+  const st = epoch > 0 ? ensembleData?.stats?.[epoch - 1] : null;
+  return st ? st.rms_m / 1000 : 0;
+}
+
+function renderEnsembleEpoch(idx, { force = false } = {}) {
+  if (!ensembleData) return;
+  const last = ensembleEpochCount();
+  idx = Math.max(0, Math.min(last, idx | 0));
   const t = ensembleData.epochs_s?.[idx] ?? idx;
   if (ensembleInfo) {
-    ensembleInfo.textContent = `epoch ${idx} · t=${Number(t).toFixed(0)}s · rms=${st ? (st.rms_m / 1000).toFixed(1) + " km" : "0.0 km"}`;
+    ensembleInfo.textContent = `epoch ${idx}/${last} · t=${Number(t).toFixed(0)}s · rms=${ensembleRmsKm(idx).toFixed(1)} km`;
+  }
+  if (!force && idx === ensembleEpoch) return;
+  ensembleEpoch = idx;
+  if (ensemblePoints) {
+    trajGroup.remove(ensemblePoints);
+    ensemblePoints.geometry?.dispose();
+    ensemblePoints.material?.dispose();
+    ensemblePoints = null;
   }
   if (!showEnsembleCb?.checked) return;
   const cloud = ensembleData.clouds?.[idx];
@@ -1346,8 +1408,15 @@ showAxesCb.addEventListener("change", () => {
 orbitPlayBtn?.addEventListener("click", orbitPlayToggle);
 orbitSlider?.addEventListener("input", () => stepOrbit(0));
 
-ensembleSlider?.addEventListener("input", () => renderEnsembleEpoch(parseInt(ensembleSlider.value, 10) || 0));
-showEnsembleCb?.addEventListener("change", () => renderEnsembleEpoch(parseInt(ensembleSlider?.value || "0", 10) || 0));
+ensembleSlider?.addEventListener("input", () => {
+  seekEnsembleEpoch(parseInt(ensembleSlider.value, 10) || 0);
+});
+showEnsembleCb?.addEventListener("change", () => {
+  const idx = parseInt(orbitSlider?.value || "0", 10) || 0;
+  const epoch = ensembleEpochForOrbitIndex(idx);
+  if (ensembleSlider) ensembleSlider.value = String(epoch);
+  renderEnsembleEpoch(epoch, { force: true });
+});
 resetViewBtn.addEventListener("click", () => {
   if (mode === "cosmos" && cosmos.loaded) {
     fitCameraToCosmos();
@@ -1462,12 +1531,10 @@ function orbitPlayToggle() {
   orbitLastTick = performance.now();
   orbitAcc = 0;
 }
-function stepOrbit(delta) {
-  if (!trajectoryData) return;
-  const pts = trajectoryData.points || [];
-  if (!pts.length) return;
-  let idx = parseInt(orbitSlider?.value || "0", 10) || 0;
-  idx = Math.max(0, Math.min(pts.length - 1, idx + delta));
+function setOrbitIndex(idx, { syncEnsemble = true } = {}) {
+  const pts = trajectoryData?.points || [];
+  if (!pts.length) return 0;
+  idx = Math.max(0, Math.min(pts.length - 1, idx | 0));
   if (orbitSlider) orbitSlider.value = String(idx);
   if (orbitMarker) orbitMarker.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
   if (orbitTimeEl) {
@@ -1475,23 +1542,32 @@ function stepOrbit(delta) {
     orbitTimeEl.textContent = `t = ${Number(t).toFixed(2)} s`;
   }
   drawGuide(idx);
+  if (syncEnsemble) syncEnsembleToOrbit(idx);
+  return idx;
+}
+function stepOrbit(delta) {
+  const cur = parseInt(orbitSlider?.value || "0", 10) || 0;
+  setOrbitIndex(cur + delta);
+}
+function seekEnsembleEpoch(epoch) {
+  if (!trajectoryData?.points?.length) return;
+  const idx = orbitIndexForEnsembleEpoch(epoch);
+  setOrbitIndex(idx, { syncEnsemble: false });
+  if (ensembleSlider) ensembleSlider.value = String(epoch);
+  renderEnsembleEpoch(epoch, { force: true });
 }
 function updateOrbitPlayback(dt) {
   if (!orbitPlaying || !trajectoryData?.points?.length) return;
-  const pts = trajectoryData.points;
-  const max = pts.length - 1;
+  const max = trajectoryData.points.length - 1;
   orbitAcc += dt * settings.playbackSpeed * 2;
+  let idx = parseInt(orbitSlider?.value || "0", 10) || 0;
+  let stepped = false;
   while (orbitAcc >= 1) {
     orbitAcc -= 1;
-    let idx = parseInt(orbitSlider?.value || "0", 10) || 0;
     idx = (idx + 1) % (max + 1);
-    if (orbitSlider) orbitSlider.value = String(idx);
-    if (orbitMarker) orbitMarker.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
-    if (orbitTimeEl) {
-      const t = Array.isArray(trajectoryData.times) ? trajectoryData.times[idx] : idx;
-      orbitTimeEl.textContent = `t = ${Number(t).toFixed(2)} s`;
-    }
+    stepped = true;
   }
+  if (stepped) setOrbitIndex(idx);
 }
 
 /* ---------------- animate ---------------- */

@@ -75,7 +75,7 @@
             <label class="toggle"><input type="checkbox" id="show-ref" checked /><span>Reference</span></label>
             <label class="toggle"><input type="checkbox" id="show-prop" /><span>Propagated</span></label>
             <label class="toggle"><input type="checkbox" id="show-corr" /><span>PINN-corrected</span></label>
-            <label class="toggle" title="Demo cloud: Earth-only two-body dispersion, not the n-body propagator"><input type="checkbox" id="show-ensemble" /><span>Ensemble</span></label>
+            <label class="toggle" title="Demo cloud: Earth-only two-body dispersion, not the n-body propagator. Advances through all 61 epochs in sync with orbit playback."><input type="checkbox" id="show-ensemble" /><span>Ensemble</span></label>
           </div>
           <div class="playback-row">
             <button id="orbit-play" class="play-btn" type="button" aria-label="Play orbit">▶</button>
@@ -83,7 +83,7 @@
             <span id="orbit-time" class="time-label">t = —</span>
           </div>
           <div class="playback-row">
-            <span class="time-label">Ensemble epoch</span>
+            <span class="time-label" title="The cloud advances through its 61 epochs as the main trajectory plays">Ensemble epoch (synced)</span>
             <input type="range" id="ensemble-slider" min="0" max="0" value="0" step="1" />
             <span id="ensemble-info" class="time-label">—</span>
           </div>
