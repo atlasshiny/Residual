@@ -1,7 +1,6 @@
 try:
     import torch
-    import torch.nn as nn
-    import torch.optim as optim
+    from torch import nn, optim
 
     HAS_TORCH = True
 except ImportError:
@@ -9,7 +8,6 @@ except ImportError:
     nn = None
     optim = None
 import copy
-import math
 
 
 class PINN(nn.Module if HAS_TORCH else object):
@@ -19,7 +17,9 @@ class PINN(nn.Module if HAS_TORCH else object):
     The physics constraint is that the derivative of delta_r must match delta_v.
     """
 
-    def __init__(self, n_features=1, out_dim=3, hidden_dims=[32, 32], lr=1e-3, l2=1e-4):
+    def __init__(self, n_features=1, out_dim=3, hidden_dims=None, lr=1e-3, l2=1e-4):
+        if hidden_dims is None:
+            hidden_dims = [32, 32]
         if not HAS_TORCH:
             raise ImportError(
                 "PyTorch is required for the PINN model. Install with 'pip install .[gpu]' or 'uv sync --extra gpu'."

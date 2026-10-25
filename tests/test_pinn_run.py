@@ -96,13 +96,6 @@ def test_synthetic_run_writes_test_metrics(tmp_path):
     results, out_path = run(_parse(out))
 
     assert out_path == str(out)
-
-
-def test_synthetic_run_writes_test_metrics(tmp_path):
-    out = tmp_path / "pinn_result.json"
-    results, out_path = run(_parse(out))
-
-    assert out_path == str(out)
     assert results["masked_fraction"] == 0.0
     assert results["n_samples"] == 12
 
@@ -125,27 +118,11 @@ def test_run_applies_mission_burn_mask_before_training(tmp_path):
     )
     out = tmp_path / "pinn_result.json"
 
-    results, _ = run(_parse(out, "--mission", str(mission)))
-    data = _load(out)
-
-
-def test_run_applies_mission_burn_mask_before_training(tmp_path):
-    mission = tmp_path / "mission.json"
-    mission.write_text(
-        json.dumps(
-            {
-                "name": "Artemis test",
-                "burns": [{"label": "TLI", "start_s": 0.0, "end_s": 100.0}],
-            }
-        )
-    )
-    out = tmp_path / "pinn_result.json"
-
-    results, _ = run(_parse(out, "--mission", str(mission)))
+    _results, _ = run(_parse(out, "--mission", str(mission)))
 
     # Burn masking only applies to real data; synthetic mode doesn't mask.
-    assert results["masked_fraction"] == 0.0
-    assert results["n_samples"] == 12
+    assert _results["masked_fraction"] == 0.0
+    assert _results["n_samples"] == 12
 
 
 def test_run_uses_time_column_for_residual_table(tmp_path):
@@ -158,7 +135,7 @@ def test_run_uses_time_column_for_residual_table(tmp_path):
     table.write_text("\n".join(rows) + "\n")
 
     out = tmp_path / "pinn_result.json"
-    results, _ = run(
+    _results, _ = run(
         _parse(
             out,
             "--data",

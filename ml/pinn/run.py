@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import sys
 from pathlib import Path
@@ -12,11 +11,9 @@ from pathlib import Path
 try:
     from .baselines import MLP, linear_predict, linear_regression, sindy, sindy_predict
     from .dataset import (
-        _default_target_cols as _infer_target_cols,
         build_xy,
         load_residual_table,
         resolve_times,
-        split_by_time,
     )
     from .features import engineer_features
     from .pinn import PINN, train_pinn
@@ -24,11 +21,9 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from baselines import MLP, linear_predict, linear_regression, sindy, sindy_predict
     from dataset import (
-        _default_target_cols as _infer_target_cols,
         build_xy,
         load_residual_table,
         resolve_times,
-        split_by_time,
     )
     from features import engineer_features
     from pinn import PINN, train_pinn
@@ -123,7 +118,7 @@ def run(args) -> tuple:
 
         # Transform test
         Y_pos_scaled_test = scaler_pos.transform(df_test[pos_cols].values)
-        Y_vel_scaled_test = scaler_vel.transform(df_test[vel_cols].values)
+        scaler_vel.transform(df_test[vel_cols].values)
 
         # Split train into fit + val
         val_frac = 0.1
