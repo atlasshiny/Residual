@@ -18,7 +18,7 @@ The project implements the restricted Earth-Moon multibody problem with a symple
   - **SINDy**: sparse polynomial baseline.
   - **Linear regression**: linear baseline.
 - **Cosmos Integration**: Python workers (`ml/cosmos/`) implement transfer, inverse-dynamics, and forward-dynamics jobs over a file contract. `scripts/pinn_to_cosmos.py` reconstructs a PINN-corrected trajectory, runs the Rust `posebuilder`, and optionally submits 9D actions to vLLM-Omni.
-- **Tauri + Three.js Viewer**: visualizes the trajectory and the PINN/SINDy metrics and expression.
+- **Tauri + Three.js Viewer**: visualizes the trajectory and the PINN/SINDy metrics and expression, plus a Sun-direction marker that tracks the current epoch (its distance is compressed to fit the lunar scene; the UI label says "not to scale").
 
 ## 📊 Results & Analysis
 
@@ -119,7 +119,7 @@ SPICE ingestion is Python-only (`scripts/fetch_spice.py` with `spiceypy`); it pr
 | `make residual-tabulated` | Generate `data/residual_table_tabulated.csv` from the measured Earth-Moon geometry (`--preserve-distance` reference) and print the analytic/tabulated RMS comparison |
 | `make residual-tabulated-sun` | Same as `residual-tabulated` but also attaches the Sun as a tidal third body (`data/reference_sun.csv`) |
 | `make train` | Train models on `data/residual_table.csv` (or `DATA=...`); writes `ml/pinn/pinn_result.json` |
-| `make ui-data` | Rebuild the Tauri viewer bundle in `tauri-src/src/data/` |
+| `make ui-data` | Rebuild the Tauri viewer bundle in `tauri-src/src/data/` (embeds the per-epoch Sun bearing from `data/reference_sun.csv` when present) |
 | `make ensemble-data` | Regenerate the demo Monte-Carlo cloud (`ensemble.json`) |
 | `make test` | Full test suite (CUDA + Rust + Python) |
 | `make test-cpu` | CPU-only validation (`SKIP_CUDA_TESTS=1`) |

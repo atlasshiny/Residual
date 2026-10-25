@@ -43,6 +43,7 @@ const showRefCb = document.getElementById("show-ref");
 const showPropCb = document.getElementById("show-prop");
 const showCorrCb = document.getElementById("show-corr");
 const showEnsembleCb = document.getElementById("show-ensemble");
+const showSunCb = document.getElementById("show-sun");
 const ensembleSlider = document.getElementById("ensemble-slider");
 const ensembleInfo = document.getElementById("ensemble-info");
 let ensembleData = null;
@@ -138,9 +139,9 @@ viewport.appendChild(renderer.domElement);
 /* lighting */
 const ambient = new THREE.AmbientLight(0x334466, 0.6);
 scene.add(ambient);
-const sun = new THREE.DirectionalLight(0xffffff, 1.1);
-sun.position.set(5000, 4000, 6000);
-scene.add(sun);
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.1);
+sunLight.position.set(5000, 4000, 6000);
+scene.add(sunLight);
 const rim = new THREE.PointLight(0x22d3ee, 0.8, 60000);
 rim.position.set(-8000, -2000, -6000);
 scene.add(rim);
@@ -186,6 +187,96 @@ const halo = new THREE.Mesh(
   })
 );
 scene.add(halo);
+
+/* Sun.  The real Sun sits ~1 AU away (~390 lunar-orbit radii), which would put
+   it far outside the lunar scene, so the marker is placed on a compressed
+   radius along the true Earth->Sun direction; the label spells that out.  The
+   directional light follows the same vector, so Earth's phase matches. */
+const SUN_MARKER_DISTANCE = 1.45; // multiples of the trajectory radius
+let sunDirections = null; // per-sample unit vectors from the bundle
+let sunRangeKm = null; // per-sample Earth-Sun range
+let sunAvailable = false;
+let sunDirection = null;
+
+function radialSpriteTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gradient.addColorStop(0, "rgba(255,255,255,1)");
+  gradient.addColorStop(0.22, "rgba(255,236,179,0.9)");
+  gradient.addColorStop(0.55, "rgba(255,186,90,0.35)");
+  gradient.addColorStop(1, "rgba(255,150,50,0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 128, 128);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function sunLabelTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(255,240,200,0.95)";
+  ctx.font = "600 44px system-ui, -apple-system, sans-serif";
+  ctx.fillText("SUN", 128, 54);
+  ctx.fillStyle = "rgba(253,230,138,0.7)";
+  ctx.font = "400 24px system-ui, -apple-system, sans-serif";
+  ctx.fillText("not to scale", 128, 92);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+const sunGroup = new THREE.Group();
+sunGroup.visible = false;
+scene.add(sunGroup);
+
+const sunBody = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 32, 32),
+  new THREE.MeshBasicMaterial({ color: 0xfff3c4, fog: false })
+);
+sunGroup.add(sunBody);
+
+const sunGlow = new THREE.Sprite(
+  new THREE.SpriteMaterial({
+    map: radialSpriteTexture(),
+    color: 0xffcf6b,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    fog: false,
+  })
+);
+sunGroup.add(sunGlow);
+
+const sunLabel = new THREE.Sprite(
+  new THREE.SpriteMaterial({
+    map: sunLabelTexture(),
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+  })
+);
+sunGroup.add(sunLabel);
+
+const sunBeam = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+  new THREE.LineDashedMaterial({
+    color: 0xffd27a,
+    transparent: true,
+    opacity: 0.3,
+    dashSize: 1,
+    gapSize: 1,
+    fog: false,
+  })
+);
+sunBeam.visible = false;
+scene.add(sunBeam);
 
 /* grid + axes */
 const grid = new THREE.GridHelper(40000, 40, 0x1f2a4a, 0x121a33);
@@ -243,6 +334,7 @@ function fitCameraToTrajectory(radius) {
   controls.target.set(0, 0, 0);
   controls.update();
   applySceneScale(R);
+  updateSunGeometry(R);
 }
 function fitCameraToCosmos() {
   // Poses were already rescaled into the scene by buildCosmosScene().
@@ -259,6 +351,42 @@ function fitCameraToCosmos() {
   camera.position.set(R * 0.35, R * 1.0, R * 2.0);
   controls.target.set(0, 0, 0);
   controls.update();
+}
+
+/* Re-lay the Sun marker for the current scene scale.  The bundle stores unit
+   Earth->Sun directions (one per trajectory sample), so the marker swings
+   along the true ~28 deg solar motion over a 30-day arc as playback advances. */
+function updateSunGeometry(radius) {
+  const R = Math.max(radius || 1, 1);
+  sunBody.scale.setScalar(R * 0.02);
+  sunGlow.scale.setScalar(R * 0.16);
+  sunLabel.scale.set(R * 0.22, R * 0.11, 1);
+  sunLabel.position.set(0, R * 0.115, 0);
+  if (!sunDirection) return;
+  sunGroup.position.copy(sunDirection).multiplyScalar(R * SUN_MARKER_DISTANCE);
+  sunLight.position.copy(sunDirection).multiplyScalar(R * 3);
+  sunBeam.geometry.setFromPoints([new THREE.Vector3(), sunGroup.position.clone()]);
+  sunBeam.material.dashSize = R * 0.008;
+  sunBeam.material.gapSize = R * 0.008;
+  sunBeam.computeLineDistances();
+}
+
+function applySunSample(index) {
+  if (!sunAvailable || !Array.isArray(sunDirections) || !sunDirections.length) return;
+  const i = Math.min(Math.max(index | 0, 0), sunDirections.length - 1);
+  const d = sunDirections[i];
+  if (!Array.isArray(d) || d.length < 3) return;
+  const v = new THREE.Vector3(d[0], d[1], d[2]);
+  if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) return;
+  if (v.lengthSq() < 1e-12) return;
+  sunDirection = v.normalize();
+  updateSunGeometry(trajRadius);
+}
+
+function setSunVisible() {
+  const on = mode === "orbit" && !!showSunCb?.checked && sunAvailable;
+  sunGroup.visible = on;
+  sunBeam.visible = on;
 }
 
 /* ---------------- helpers ---------------- */
@@ -367,6 +495,8 @@ async function loadTrajectory() {
   ensemblePoints = null;
   orbitMarker = null;
   ensembleEpoch = -1;
+  sunAvailable = false;
+  setSunVisible();
   setDot(trajDot, "loading");
   try {
     const response = await fetch(src);
@@ -376,6 +506,18 @@ async function loadTrajectory() {
     const points = rawPoints.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
     trajectoryData = data;
     if (points.length < 2) throw new Error("Not enough trajectory samples");
+
+    // Sun direction track (optional; bundles built before it existed omit it).
+    sunDirections =
+      Array.isArray(data.sun_directions) && data.sun_directions.length
+        ? data.sun_directions
+        : null;
+    sunRangeKm = Array.isArray(data.sun_range_km) ? data.sun_range_km : null;
+    sunAvailable = !!sunDirections;
+    if (showSunCb) showSunCb.disabled = !sunAvailable;
+    if (sunAvailable) applySunSample(0);
+    else sunDirection = null;
+    setSunVisible();
 
     // glowing tube along curve
     let maxR = 0, minR = Infinity;
@@ -479,6 +621,16 @@ async function loadTrajectory() {
       ],
       ["Loop", closedLoop ? "Closed" : "Open"],
     ];
+    const sunRanges = (sunRangeKm || []).filter((v) => Number.isFinite(v) && v > 0);
+    if (sunRanges.length) {
+      const AU = 149597870.7;
+      const lo = Math.min(...sunRanges) / AU;
+      const hi = Math.max(...sunRanges) / AU;
+      kvPairs.push([
+        "Sun range",
+        lo === hi ? `${lo.toFixed(3)} AU` : `${lo.toFixed(3)}–${hi.toFixed(3)} AU`,
+      ]);
+    }
     for (const [k, v] of kvPairs) {
       const dt = document.createElement("dt"); dt.textContent = k;
       const dd = document.createElement("dd"); dd.textContent = v;
@@ -878,6 +1030,28 @@ function drawGuide(idx) {
   const ep = px(proj(earth3)); ctx.fillStyle = "#2563eb"; ctx.beginPath(); ctx.arc(ep[0], ep[1], 6, 0, Math.PI*2); ctx.fill();
   // moon
   const mp = px(proj(moon3)); ctx.fillStyle = "#9ca3af"; ctx.beginPath(); ctx.arc(mp[0], mp[1], 4, 0, Math.PI*2); ctx.fill();
+  // sun bearing (the real Sun is ~1 AU out, so only the direction fits)
+  if (sunAvailable && Array.isArray(sunDirections) && sunDirections.length) {
+    const d3 = sunDirections[Math.min(i, sunDirections.length - 1)];
+    const d2 = d3 ? proj(d3) : null;
+    const dlen = d2 ? Math.hypot(d2[0], d2[1]) : 0;
+    if (dlen > 0) {
+      const ux = d2[0] / dlen;
+      const uy = -d2[1] / dlen; // canvas y grows downwards
+      const x0 = ep[0] + ux * 14;
+      const y0 = ep[1] + uy * 14;
+      const x1 = ep[0] + ux * 36;
+      const y1 = ep[1] + uy * 36;
+      ctx.strokeStyle = "rgba(253,230,138,0.75)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+      ctx.fillStyle = "#fde68a";
+      ctx.beginPath(); ctx.arc(x1, y1, 3, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "rgba(253,230,138,0.85)";
+      ctx.font = "10px sans-serif";
+      ctx.fillText("Sun", x1 + 5, y1 + 3);
+    }
+  }
   // spacecraft
   const sp = px(proj(pts[i])); ctx.fillStyle = "#f59e0b"; ctx.beginPath(); ctx.arc(sp[0], sp[1], 5, 0, Math.PI*2); ctx.fill();
   // labels
@@ -1359,6 +1533,7 @@ function updateViewForMode() {
     if (cosmos.loaded) fitCameraToCosmos();
   } else if (trajRadius) {
     applySceneScale(trajRadius);
+    updateSunGeometry(trajRadius);
     controls.minDistance = trajRadius * 0.02;
     controls.maxDistance = trajRadius * 20;
   }
@@ -1368,6 +1543,7 @@ function updateViewForMode() {
   if (mode !== "cosmos") frameRender.classList.add("is-hidden");
   else if (cosmos.loaded) updateFrameImage(cosmos.current);
   grid.visible = showGridCb.checked;
+  setSunVisible();
 }
 modeTabs.addEventListener("click", (ev) => {
   const tab = ev.target.closest(".mode-tab");
@@ -1405,6 +1581,7 @@ showGridCb.addEventListener("change", () => {
 showAxesCb.addEventListener("change", () => {
   axes.visible = showAxesCb.checked;
 });
+showSunCb?.addEventListener("change", setSunVisible);
 orbitPlayBtn?.addEventListener("click", orbitPlayToggle);
 orbitSlider?.addEventListener("input", () => stepOrbit(0));
 
@@ -1541,6 +1718,7 @@ function setOrbitIndex(idx, { syncEnsemble = true } = {}) {
     const t = Array.isArray(trajectoryData.times) ? trajectoryData.times[idx] : idx;
     orbitTimeEl.textContent = `t = ${Number(t).toFixed(2)} s`;
   }
+  applySunSample(idx);
   drawGuide(idx);
   if (syncEnsemble) syncEnsembleToOrbit(idx);
   return idx;

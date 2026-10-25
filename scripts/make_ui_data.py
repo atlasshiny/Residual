@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import shutil
 import sys
 from datetime import UTC, datetime
@@ -44,6 +45,63 @@ def _component(columns: list[str], axis: str) -> str | None:
         if candidate in columns:
             return candidate
     return None
+
+
+def _load_sun_track(
+    times: list[float], path: Path | None = None
+) -> tuple[list[list[float]], list[float]] | None:
+    """Align ``data/reference_sun.csv`` to the trajectory samples.
+
+    ``scripts/convert_reference.py --sun-raw`` writes the Sun's position in the
+    same solver frame (and with the same time tags) as the Moon arc, so the
+    viewer can show the true Earth->Sun direction at every epoch instead of a
+    fixed placeholder.  Returns unit directions and ranges in kilometres, or
+    ``None`` when the file is missing or does not line up with the arc.
+    """
+    path = path or ROOT / "data" / "reference_sun.csv"
+    if not path.exists():
+        _warn(f"missing source, no Sun in the scene: {path}")
+        return None
+    rows = _read_csv(path)
+    if not rows:
+        _warn(f"empty source, no Sun in the scene: {path}")
+        return None
+    by_time = {round(float(r["t"]), 6): r for r in rows}
+
+    directions: list[list[float]] = []
+    ranges_km: list[float] = []
+    missing = 0
+    for t in times:
+        row = by_time.get(round(float(t), 6))
+        vector = None
+        if row is not None:
+            try:
+                vector = tuple(float(row[k]) for k in ("x", "y", "z"))
+            except (KeyError, ValueError):
+                vector = None
+        if vector is None:
+            missing += 1
+            directions.append(directions[-1] if directions else [0.0, 0.0, 0.0])
+            ranges_km.append(ranges_km[-1] if ranges_km else 0.0)
+            continue
+        distance = math.sqrt(sum(v * v for v in vector))
+        if not math.isfinite(distance) or distance == 0.0:
+            missing += 1
+            directions.append(directions[-1] if directions else [0.0, 0.0, 0.0])
+            ranges_km.append(ranges_km[-1] if ranges_km else 0.0)
+            continue
+        directions.append([v / distance for v in vector])
+        ranges_km.append(distance / 1000.0)
+
+    if missing > max(1, len(times) // 100):
+        _warn(
+            f"{missing}/{len(times)} Sun samples do not align with the arc; "
+            "skipping the Sun in the scene"
+        )
+        return None
+    if missing:
+        _warn(f"{missing}/{len(times)} Sun samples were filled from the previous epoch")
+    return directions, ranges_km
 
 
 def build_trajectory() -> None:
@@ -129,6 +187,7 @@ def build_trajectory() -> None:
         else:
             have_corr = False
 
+    sun = _load_sun_track(times)
     payload = {
         "points": points,
         "times": times,
@@ -137,6 +196,9 @@ def build_trajectory() -> None:
         "generated_utc": _now_iso(),
         "residual_convention": "reference - propagated",
     }
+    if sun is not None:
+        payload["sun_directions"] = sun[0]
+        payload["sun_range_km"] = sun[1]
     if have_prop and len(propagated) == len(points):
         payload["points_propagated"] = propagated
         payload["overlay_sources"] = {"points_propagated": "data/residual_table.csv"}
@@ -150,7 +212,8 @@ def build_trajectory() -> None:
     print(
         f"wrote {dst} ({len(points)} points, stride={stride}, "
         f"prop={len(propagated) if have_prop else 0}, "
-        f"corr={len(corrected) if have_corr else 0})"
+        f"corr={len(corrected) if have_corr else 0}, "
+        f"sun={len(sun[0]) if sun is not None else 0})"
     )
 
 
@@ -182,6 +245,10 @@ def main() -> int:
     if (OUT_DIR / "ensemble.json").is_file():
         files.append("ensemble.json")
         sources["ensemble"] = "tauri-src/src/data/ensemble.json"
+    if (ROOT / "data" / "reference_sun.csv").exists():
+        # The Sun track is embedded in trajectory.json rather than shipped as
+        # its own bundle file.
+        sources["sun"] = "data/reference_sun.csv (embedded in trajectory.json)"
 
     ui_manifest = {
         "schema": "ui-data/v1",

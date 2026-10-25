@@ -106,7 +106,7 @@ Python, reference PyTorch path first `[paper]` (§5.3.1: reference implementatio
 
 ### 4.4 UI (`ui/`)
 
-Tauri + Three.js. Shows predicted vs actual path, the symbolic equation, error plots, and plays pre-rendered Cosmos clips. It never waits on live generation.
+Tauri + Three.js. Shows predicted vs actual path, the symbolic equation, error plots, a Sun-direction marker driven by the reference Sun track (distance compressed to fit the lunar scene), and plays pre-rendered Cosmos clips. It never waits on live generation.
 
 ## 5. Residual and PINN contract
 
