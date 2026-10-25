@@ -22,6 +22,37 @@ const stripMetrics = document.getElementById("strip-metrics");
 const autoRotateCb = document.getElementById("auto-rotate");
 const showGridCb = document.getElementById("show-grid");
 const showAxesCb = document.getElementById("show-axes");
+const residualCanvas = document.getElementById("residual-canvas");
+const residualStatus = document.getElementById("residual-status");
+const residualDot = document.getElementById("residual-dot");
+const residualHover = document.getElementById("residual-hover");
+const residualMetrics = document.getElementById("residual-metrics");
+const provenanceEl = document.getElementById("provenance");
+const orbitSlider = document.getElementById("orbit-slider");
+const orbitPlayBtn = document.getElementById("orbit-play");
+const orbitTimeEl = document.getElementById("orbit-time");
+const filmstripEl = document.getElementById("filmstrip");
+const jobBaseInput = document.getElementById("job-base");
+const scanJobsBtn = document.getElementById("scan-jobs-btn");
+const jobListEl = document.getElementById("job-list");
+const cosmosMetricsEl = document.getElementById("cosmos-metrics");
+const exportSnapshotBtn = document.getElementById("export-snapshot-btn");
+const exportReportBtn = document.getElementById("export-report-btn");
+const showRefCb = document.getElementById("show-ref");
+const showPropCb = document.getElementById("show-prop");
+const showCorrCb = document.getElementById("show-corr");
+
+// data globals
+let predictionsData = null;
+let manifestData = null;
+let uiManifestData = null;
+let residualTargetCols = [];
+let residualHoverIdx = -1;
+let orbitPlaying = false;
+let orbitAcc = 0;
+let orbitLastTick = null;
+let orbitMarker = null;
+let trajectoryData = null;
 const resetViewBtn = document.getElementById("reset-view");
 
 /* cosmos viewer */
@@ -228,6 +259,13 @@ async function loadTrajectory() {
   const card = document.getElementById("trajectory-card");
   card?.querySelectorAll(".fallback-note").forEach((n) => n.remove());
   stripMetrics.querySelector('[data-strip="traj-samples"]')?.remove();
+  // clear previous geometry (fixes duplicate meshes on reload)
+  while (trajGroup.children.length) {
+    const c = trajGroup.children[0];
+    trajGroup.remove(c);
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) (Array.isArray(c.material) ? c.material : [c.material]).forEach((m) => m?.dispose?.());
+  }
   setDot(trajDot, "loading");
   try {
     const response = await fetch(src);
@@ -235,6 +273,7 @@ async function loadTrajectory() {
     const data = await response.json();
     const rawPoints = data.points || [];
     const points = rawPoints.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+    trajectoryData = data;
     if (points.length < 2) throw new Error("Not enough trajectory samples");
 
     // glowing tube along curve
@@ -277,6 +316,34 @@ async function loadTrajectory() {
     );
     head.position.copy(points[points.length - 1]);
     trajGroup.add(head);
+
+    // overlays (optional)
+    const overlaySpecs = [
+      { key: "points_propagated", color: 0x22d3ee, name: "prop" },
+      { key: "points_corrected", color: 0xf472b6, name: "corr" },
+    ];
+    for (const spec of overlaySpecs) {
+      const arr = data[spec.key];
+      if (!Array.isArray(arr) || arr.length < 2) continue;
+      const pts = arr.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      const mat = new THREE.LineBasicMaterial({ color: spec.color, transparent: true, opacity: 0.85 });
+      const line = new THREE.Line(geo, mat);
+      line.name = `overlay-${spec.name}`;
+      line.visible = spec.name === "prop" ? (showPropCb?.checked ?? false) : (showCorrCb?.checked ?? false);
+      trajGroup.add(line);
+    }
+
+    // orbit playback marker
+    orbitMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(180, 20, 20),
+      new THREE.MeshBasicMaterial({ color: 0x67e8f9 })
+    );
+    orbitMarker.position.copy(points[0]);
+    trajGroup.add(orbitMarker);
+
+    // slider range
+    if (orbitSlider) { orbitSlider.max = String(Math.max(points.length - 1, 1)); orbitSlider.value = "0"; }
 
     // metrics
     trajKv.innerHTML = "";
@@ -376,6 +443,20 @@ async function loadPinnResult() {
 
     pinnLoaded = true;
     sceneStatus.textContent = (trajectoryLoaded && pinnLoaded) ? "Scene ready" : sceneStatus.textContent;
+    // residual metrics table
+    if (residualMetrics) {
+      residualMetrics.innerHTML = "";
+      const models = [
+        ["PINN", data.pinn], ["MLP", data.mlp], ["SINDy", data.sindy], ["LinReg", data.linreg],
+      ];
+      for (const [name, m] of models) {
+        if (!m) continue;
+        const card = buildMetricCard(`${name} test R²`, fmt(m.test_r2 ?? m.train_r2, 4), { accent: name === "PINN" });
+        residualMetrics.appendChild(card);
+      }
+      const sc = buildMetricCard("Samples", data.n_samples ?? "—", {});
+      residualMetrics.appendChild(sc);
+    }
     settle();
   } catch (error) {
     const message = fileError("PINN result unavailable", src, error);
@@ -390,6 +471,118 @@ async function loadPinnResult() {
     showError(message);
     settle();
   }
+}
+
+async function loadPredictions() {
+  const src = settings.predictionsPath || "./data/pinn_predictions.json";
+  setDot(residualDot, "loading");
+  try {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    predictionsData = await res.json();
+    residualTargetCols = Array.isArray(predictionsData.target_columns) ? predictionsData.target_columns : [];
+    residualStatus.textContent = `Loaded ${predictionsData.rows?.length ?? 0} predictions`;
+    setDot(residualDot, "ok");
+    drawResidual();
+  } catch (e) {
+    predictionsData = null;
+    residualStatus.textContent = `Predictions unavailable — ${e.message}`;
+    setDot(residualDot, "err");
+  }
+}
+
+async function loadManifest() {
+  const src = settings.manifestPath || "./data/manifest.json";
+  try {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    manifestData = await res.json();
+  } catch (e) {
+    manifestData = null;
+  }
+  updateProvenance();
+}
+
+async function loadUiManifest() {
+  try {
+    const res = await fetch("./data/ui_manifest.json");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    uiManifestData = await res.json();
+  } catch (e) {
+    uiManifestData = null;
+  }
+  updateProvenance();
+}
+
+function updateProvenance() {
+  if (!provenanceEl) return;
+  const parts = [];
+  if (manifestData) {
+    parts.push(manifestData.dataset || "dataset");
+    if (manifestData.source) parts.push(manifestData.source.provider || "");
+    if (manifestData.source?.target) parts.push(`target ${manifestData.source.target}`);
+    if (manifestData.generated_utc) parts.push(`generated ${manifestData.generated_utc}`);
+    if (manifestData.source?.retrieved_utc) parts.push(`retrieved ${manifestData.source.retrieved_utc}`);
+  }
+  if (uiManifestData?.generated_utc) parts.push(`UI bundle ${uiManifestData.generated_utc}`);
+  if (manifestData?.generated_utc && uiManifestData?.generated_utc && uiManifestData.generated_utc < manifestData.generated_utc) {
+    parts.push("⚠ bundle may be stale");
+  }
+  provenanceEl.textContent = parts.filter(Boolean).join(" · ") || "No provenance available";
+}
+
+function drawResidual() {
+  if (!residualCanvas || !predictionsData?.rows?.length) return;
+  const ctx = residualCanvas.getContext("2d");
+  const W = residualCanvas.width, H = residualCanvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const rows = predictionsData.rows;
+  const ts = rows.map((r) => r.t);
+  const tMin = Math.min(...ts), tMax = Math.max(...ts);
+  const cols = residualTargetCols.length ? residualTargetCols : Object.keys(rows[0].actual || {});
+  let yMin = Infinity, yMax = -Infinity;
+  for (const r of rows) {
+    for (const c of cols) {
+      const a = r.actual?.[c], p = r.pinn?.[c], m = r.mlp?.[c];
+      for (const v of [a, p, m]) if (Number.isFinite(v)) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); }
+    }
+  }
+  if (!Number.isFinite(yMin)) return;
+  const pad = (yMax - yMin) * 0.08 || 1;
+  yMin -= pad; yMax += pad;
+  const xOf = (t) => 30 + (t - tMin) / (tMax - tMin || 1) * (W - 40);
+  const yOf = (v) => H - 20 - (v - yMin) / (yMax - yMin || 1) * (H - 30);
+  ctx.strokeStyle = "rgba(255,255,255,0.15)";
+  ctx.beginPath(); ctx.moveTo(30, 10); ctx.lineTo(30, H-20); ctx.lineTo(W-10, H-20); ctx.stroke();
+  const showActual = document.getElementById("show-actual")?.checked ?? true;
+  const showPinn = document.getElementById("show-pinn")?.checked ?? true;
+  const showMlp = document.getElementById("show-mlp")?.checked ?? false;
+  const drawSeries = (key, color) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
+    let first = true;
+    for (const r of rows) {
+      const v = r[key]?.[cols[0]];
+      if (!Number.isFinite(v)) continue;
+      const x = xOf(r.t), y = yOf(v);
+      if (first) { ctx.moveTo(x, y); first = false; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  };
+  if (showActual) drawSeries("actual", "#f59e0b");
+  if (showPinn) drawSeries("pinn", "#22d3ee");
+  if (showMlp) drawSeries("mlp", "#f472b6");
+  ctx.font = "10px sans-serif";
+  let lx = 34;
+  const legend = [];
+  if (showActual) legend.push(["Actual", "#f59e0b"]);
+  if (showPinn) legend.push(["PINN", "#22d3ee"]);
+  if (showMlp) legend.push(["MLP", "#f472b6"]);
+  for (const [lab, col] of legend) {
+    ctx.fillStyle = col; ctx.fillRect(lx, 4, 10, 10);
+    ctx.fillStyle = "#cbd5e1"; ctx.fillText(lab, lx + 14, 13);
+    lx += 70;
+  }
+  residualChart = { rows, xOf, yOf, tMin, tMax };
 }
 
 function maybeFinishLoading() {
@@ -734,6 +927,48 @@ async function applyCosmosJob({ job, outputs, manifest, dirURLBase, dirFiles }) 
     buildCosmosScene(cosmos.poses);
     fillCosmosInfo(job, outputs, manifest);
 
+    // load metrics.json if available
+    (async () => {
+      let metrics = null;
+      if (dirFiles) {
+        const m = dirFiles.find((f) => f.name === "metrics.json");
+        if (m) { try { metrics = JSON.parse(await m.text()); } catch {} }
+      } else if (dirURLBase) {
+        try { const r = await fetch(dirURLBase + "metrics.json"); if (r.ok) metrics = await r.json(); } catch {}
+      }
+      if (cosmosMetricsEl) {
+        cosmosMetricsEl.innerHTML = "";
+        if (metrics) {
+          const pairs = [
+            ["RRE", `${Number(metrics.rre_degrees).toFixed(4)} deg`],
+            ["RTE", `${Number(metrics.rte_metres).toFixed(2)} m`],
+            ["ATE", `${Number(metrics.ate_metres).toFixed(2)} m`],
+            ["Frames", metrics.frames],
+            ["Aligned", metrics.aligned ? "yes" : "no"],
+            ["Scale k", Number(metrics.scale_k_km_per_m).toFixed(1)],
+          ];
+          for (const [k, v] of pairs) {
+            const dt = document.createElement("dt"); dt.textContent = k;
+            const dd = document.createElement("dd"); dd.textContent = String(v);
+            cosmosMetricsEl.appendChild(dt); cosmosMetricsEl.appendChild(dd);
+          }
+        } else {
+          cosmosMetricsEl.innerHTML = "<dt>Metrics</dt><dd>not available (run evaluator)</dd>";
+        }
+      }
+    })();
+
+    // filmstrip
+    if (filmstripEl) {
+      filmstripEl.innerHTML = "";
+      for (const img of cosmos.images) {
+        const thumb = document.createElement("img");
+        thumb.src = img.url; thumb.alt = img.name; thumb.className = "film-thumb";
+        thumb.addEventListener("click", () => { cosmos.current = img.frame; updateFrameUI(img.frame); });
+        filmstripEl.appendChild(thumb);
+      }
+    }
+
     frameSlider.max = String(cosmos.frames - 1);
     frameSlider.value = "0";
     cosmos.loaded = true;
@@ -863,6 +1098,9 @@ showGridCb.addEventListener("change", () => {
 showAxesCb.addEventListener("change", () => {
   axes.visible = showAxesCb.checked;
 });
+orbitPlayBtn?.addEventListener("click", orbitPlayToggle);
+orbitSlider?.addEventListener("input", () => stepOrbit(0));
+
 resetViewBtn.addEventListener("click", () => {
   if (mode === "cosmos" && cosmos.loaded) {
     // refit the camera on the reconstructed pose ring
@@ -874,6 +1112,13 @@ resetViewBtn.addEventListener("click", () => {
     controls.target.set(0, 0, 0);
   }
   controls.update();
+});
+
+showPropCb?.addEventListener("change", () => {
+  trajGroup.children.forEach((c) => { if (c.name === "overlay-prop") c.visible = !!showPropCb.checked; });
+});
+showCorrCb?.addEventListener("change", () => {
+  trajGroup.children.forEach((c) => { if (c.name === "overlay-corr") c.visible = !!showCorrCb.checked; });
 });
 
 /* ---------------- settings modal ---------------- */
@@ -924,7 +1169,16 @@ settingsOverlay.addEventListener("click", (ev) => {
   if (ev.target === settingsOverlay) closeSettings();
 });
 window.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && !settingsOverlay.classList.contains("is-hidden")) closeSettings();
+  if (ev.key === "Escape" && !settingsOverlay.classList.contains("is-hidden")) { closeSettings(); return; }
+  if (settingsOverlay && !settingsOverlay.classList.contains("is-hidden")) return;
+  if (ev.key === " ") { ev.preventDefault(); if (mode === "cosmos") { cosmos.playing = !cosmos.playing; playBtn.textContent = cosmos.playing ? "⏸" : "▶"; } else { orbitPlayToggle(); } }
+  else if (ev.key === "ArrowRight") { if (mode === "cosmos") { cosmos.current = Math.min(cosmos.frames - 1, cosmos.current + 1); updateFrameUI(cosmos.current); } else stepOrbit(1); }
+  else if (ev.key === "ArrowLeft") { if (mode === "cosmos") { cosmos.current = Math.max(0, cosmos.current - 1); updateFrameUI(cosmos.current); } else stepOrbit(-1); }
+  else if (ev.key === "1") { mode = "orbit"; updateViewForMode(); }
+  else if (ev.key === "2") { mode = "cosmos"; updateViewForMode(); }
+  else if (ev.key === "f" || ev.key === "F") {
+    controls.target.set(0,0,0); camera.position.set(0,6000,22000); controls.update();
+  }
 });
 
 /* live-apply + persist on any change (persist on <input> and <change> so
@@ -955,6 +1209,44 @@ reloadDataBtn.addEventListener("click", () => {
   loadPinnResult();
 });
 
+/* orbit playback */
+function orbitPlayToggle() {
+  orbitPlaying = !orbitPlaying;
+  if (orbitPlayBtn) orbitPlayBtn.textContent = orbitPlaying ? "⏸" : "▶";
+  orbitLastTick = performance.now();
+  orbitAcc = 0;
+}
+function stepOrbit(delta) {
+  if (!trajectoryData) return;
+  const pts = trajectoryData.points || [];
+  if (!pts.length) return;
+  let idx = parseInt(orbitSlider?.value || "0", 10) || 0;
+  idx = Math.max(0, Math.min(pts.length - 1, idx + delta));
+  if (orbitSlider) orbitSlider.value = String(idx);
+  if (orbitMarker) orbitMarker.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
+  if (orbitTimeEl) {
+    const t = Array.isArray(trajectoryData.times) ? trajectoryData.times[idx] : idx;
+    orbitTimeEl.textContent = `t = ${Number(t).toFixed(2)} s`;
+  }
+}
+function updateOrbitPlayback(dt) {
+  if (!orbitPlaying || !trajectoryData?.points?.length) return;
+  const pts = trajectoryData.points;
+  const max = pts.length - 1;
+  orbitAcc += dt * settings.playbackSpeed * 2;
+  while (orbitAcc >= 1) {
+    orbitAcc -= 1;
+    let idx = parseInt(orbitSlider?.value || "0", 10) || 0;
+    idx = (idx + 1) % (max + 1);
+    if (orbitSlider) orbitSlider.value = String(idx);
+    if (orbitMarker) orbitMarker.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
+    if (orbitTimeEl) {
+      const t = Array.isArray(trajectoryData.times) ? trajectoryData.times[idx] : idx;
+      orbitTimeEl.textContent = `t = ${Number(t).toFixed(2)} s`;
+    }
+  }
+}
+
 /* ---------------- animate ---------------- */
 function animate() {
   requestAnimationFrame(animate);
@@ -973,21 +1265,61 @@ function animate() {
       cosmos.current = (cosmos.current + 1) % cosmos.frames;
     }
     updateFrameUI(cosmos.current);
+  } else if (mode === "orbit" && orbitPlaying) {
+    const now = performance.now();
+    const dt = Math.min((now - (orbitLastTick ?? now)) / 1000, 0.25);
+    orbitLastTick = now;
+    updateOrbitPlayback(dt);
   } else {
     cosmos.lastTick = performance.now();
+    orbitLastTick = performance.now();
   }
 
   renderer.render(scene, camera);
 }
 
 /* ---------------- boot ---------------- */
+loadDemoBtn?.addEventListener("click", () => loadDemoJob());
+
+exportSnapshotBtn?.addEventListener("click", () => {
+  try {
+    const url = renderer.domElement.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = url; a.download = "residual-snapshot.png"; a.click();
+  } catch (e) { showError(`Export failed: ${e.message}`); }
+});
+exportReportBtn?.addEventListener("click", () => {
+  const report = {
+    generated: new Date().toISOString(),
+    provenance: provenanceEl?.textContent || "",
+    predictions_rows: predictionsData?.rows?.length ?? null,
+    cosmos: cosmos.job ? { job_id: cosmos.job.job_id || cosmos.job.id, frames: cosmos.frames, fps: cosmos.fps } : null,
+  };
+  const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "residual-report.json"; a.click();
+  URL.revokeObjectURL(url);
+});
 loadJobBtn.addEventListener("click", () => jobDirInput.click());
 jobDirInput.addEventListener("change", () => {
   const files = Array.from(jobDirInput.files || []);
   if (files.length) loadJobFromFiles(files);
   jobDirInput.value = "";
 });
-loadDemoBtn.addEventListener("click", () => loadDemoJob());
+scanJobsBtn?.addEventListener("click", async () => {
+  const base = (jobBaseInput?.value || "").trim();
+  if (!base) return;
+  settings.jobDir = base.endsWith("/") ? base : base + "/";
+  save();
+  await loadDemoJob();
+  if (jobListEl && cosmos.job) {
+    jobListEl.innerHTML = "";
+    const li = document.createElement("li");
+    li.textContent = `${cosmos.job.job_id || cosmos.job.id || "job"} · ${cosmos.job.mode || "—"} · ${cosmos.frames} frames · ${cosmos.job.pointing_law || "—"}`;
+    jobListEl.appendChild(li);
+  }
+});
 
 setLoading(true);
 sceneStatus.textContent = "Loading data…";
@@ -998,6 +1330,38 @@ updateViewForMode();
 animate();
 loadTrajectory();
 loadPinnResult();
+loadPredictions();
+loadManifest();
+loadUiManifest();
+
+// residual canvas hover
+if (residualCanvas) {
+  residualCanvas.addEventListener("mousemove", (ev) => {
+    if (!residualChart.rows?.length) return;
+    const rect = residualCanvas.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    const { rows, xOf } = residualChart;
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < rows.length; i++) {
+      const x = xOf(rows[i].t);
+      const d = Math.abs(x - mx);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best >= 0 && bestD < 12) {
+      const r = rows[best];
+      const col = residualTargetCols[0];
+      residualHover.textContent = `t=${Number(r.t).toFixed(1)} actual=${Number(r.actual?.[col]).toFixed(4)} PINN=${Number(r.pinn?.[col]).toFixed(4)}`;
+      residualHoverIdx = best;
+    } else {
+      residualHover.textContent = "";
+      residualHoverIdx = -1;
+    }
+  });
+  // redraw on toggle
+  for (const id of ["show-actual","show-pinn","show-mlp"]) {
+    document.getElementById(id)?.addEventListener("change", drawResidual);
+  }
+}
 
 // failsafe: hide loader after 6s even if something stalls
 setTimeout(() => setLoading(false), 6000);

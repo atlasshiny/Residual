@@ -71,6 +71,17 @@
           </div>
           <p id="trajectory-status" class="status-text">Loading trajectory…</p>
           <dl class="kv" id="traj-kv"></dl>
+          <div class="overlay-row">
+            <label class="toggle"><input type="checkbox" id="show-ref" checked /><span>Reference</span></label>
+            <label class="toggle"><input type="checkbox" id="show-prop" /><span>Propagated</span></label>
+            <label class="toggle"><input type="checkbox" id="show-corr" /><span>PINN-corrected</span></label>
+          </div>
+          <div class="playback-row">
+            <button id="orbit-play" class="play-btn" type="button" aria-label="Play orbit">▶</button>
+            <input type="range" id="orbit-slider" min="0" max="0" value="0" step="1" />
+            <span id="orbit-time" class="time-label">t = —</span>
+          </div>
+          <p id="provenance" class="status-text provenance"></p>
         </section>
 
         <section class="card" id="pinn-card" data-mode-panel="orbit">
@@ -94,6 +105,22 @@
             <summary>Raw JSON</summary>
             <pre id="pinn-raw"></pre>
           </details>
+        </section>
+
+        <section class="card" id="residual-card" data-mode-panel="orbit">
+          <div class="card-head">
+            <h2>Residual analysis</h2>
+            <span class="status-dot" id="residual-dot"></span>
+          </div>
+          <p id="residual-status" class="status-text">Loading predictions…</p>
+          <div class="model-toggles" id="model-toggles">
+            <label class="toggle"><input type="checkbox" id="show-actual" checked /><span>Actual</span></label>
+            <label class="toggle"><input type="checkbox" id="show-pinn" checked /><span>PINN</span></label>
+            <label class="toggle"><input type="checkbox" id="show-mlp" /><span>MLP</span></label>
+          </div>
+          <canvas id="residual-canvas" width="320" height="180" aria-label="Residual plot"></canvas>
+          <p id="residual-hover" class="status-text"></p>
+          <div id="residual-metrics" class="metrics-grid"></div>
         </section>
 
         <section class="card" id="cosmos-card" data-mode-panel="cosmos">
@@ -122,6 +149,24 @@
             <p class="frame-empty" id="frame-empty-note">Scrub a frame to inspect its pose.</p>
             <dl class="kv frame-meta" id="cosmos-frame-meta"></dl>
             <code id="cosmos-pose-matrix" class="pose-matrix">—</code>
+          </div>
+
+          <h3 class="subhead">Metrics</h3>
+          <dl class="kv" id="cosmos-metrics"></dl>
+
+          <h3 class="subhead">Frames</h3>
+          <div class="filmstrip" id="filmstrip"></div>
+
+          <h3 class="subhead">Job queue</h3>
+          <div class="btn-row">
+            <input type="text" id="job-base" class="settings-input" placeholder="./data/demo_job/" />
+            <button id="scan-jobs-btn" class="btn ghost" type="button">Scan</button>
+          </div>
+          <ul id="job-list" class="job-list"></ul>
+
+          <div class="btn-row">
+            <button id="export-snapshot-btn" class="btn ghost" type="button">Export snapshot</button>
+            <button id="export-report-btn" class="btn ghost" type="button">Export report</button>
           </div>
 
           <details class="raw-json">
