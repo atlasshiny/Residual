@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data fetch-spice residual residual-tabulated train test-cpu test-cuda tauri bench clean ui-data ensemble-data
+.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench clean ui-data ensemble-data
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -52,6 +52,12 @@ fetch-spice:
 	uv run --extra data python scripts/convert_reference.py \
 	  --raw data/raw_spice.csv --mode $(SPICE_MODE) $(CONVERT_ARGS)
 
+# Fetch a Sun arc (target 10) over the same window as the Moon arc.
+fetch-sun:
+	uv run --extra data python scripts/fetch_horizons.py \
+	  --target 10 --start "$(SPICE_START)" $(if $(SPICE_STOP),--stop "$(SPICE_STOP)",) \
+	  --step $(SPICE_STEP) --out data/raw_sun.csv $(HORIZONS_ARGS)
+
 # Reference trajectory -> residual table (dr, dv per sample).
 # Uses the circular Earth-Moon ephemeris, matching the CUDA kernel.
 data/reference.csv:
@@ -65,18 +71,28 @@ residual: data/reference.csv
 # circular model's radius, which throws away the geometry the table needs.
 PRESERVED_REFERENCE ?= data/reference_preserve.csv
 
-$(PRESERVED_REFERENCE): data/raw_moon.csv
+$(PRESERVED_REFERENCE): data/raw_moon.csv data/raw_sun.csv
 	uv run --extra data python scripts/convert_reference.py \
 	  --raw data/raw_moon.csv --out $(PRESERVED_REFERENCE) \
-	  --manifest data/reference_preserve.manifest.json --preserve-distance
+	  --manifest data/reference_preserve.manifest.json --preserve-distance \
+	  --sun-raw data/raw_sun.csv --sun-out data/reference_sun.csv
 
 data/raw_moon.csv:
 	$(MAKE) fetch-data
+
+data/raw_sun.csv:
+	$(MAKE) fetch-sun
 
 residual-tabulated: $(PRESERVED_REFERENCE)
 	cargo run -p residual --example residual_pipeline -- \
 	  $(PRESERVED_REFERENCE) data/residual_table_tabulated.csv \
 	  --ephemeris tabulated --compare
+
+# Same as residual-tabulated but also attaches the Sun as a tidal third body.
+residual-tabulated-sun: $(PRESERVED_REFERENCE) data/reference_sun.csv
+	cargo run -p residual --example residual_pipeline -- \
+	  $(PRESERVED_REFERENCE) data/residual_table_tabulated_sun.csv \
+	  --ephemeris tabulated --sun data/reference_sun.csv --compare
 
 # Train PINN/MLP/SINDy.  Uses data/residual_table.csv when present, otherwise
 # falls back to the synthetic demo.  Override with e.g.

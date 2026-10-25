@@ -501,6 +501,8 @@ pub enum EphemerisError {
     NotSorted { index: usize },
     /// Some samples carry a Sun position and others do not.
     InconsistentSun { index: usize },
+    /// A Sun sample's time does not match the corresponding Moon sample.
+    SunTimeMismatch { index: usize },
     /// The requested time lies outside the tabulated span.
     OutOfRange { t: f64, start: f64, end: f64 },
     /// A mass ratio was zero or not finite, so the Earth track cannot be
@@ -520,6 +522,12 @@ impl fmt::Display for EphemerisError {
                 write!(
                     f,
                     "ephemeris sample {index} disagrees about Sun availability"
+                )
+            }
+            Self::SunTimeMismatch { index } => {
+                write!(
+                    f,
+                    "Sun sample {index} does not share the Moon sample's time"
                 )
             }
             Self::OutOfRange { t, start, end } => {
@@ -569,6 +577,36 @@ impl TabulatedEphemeris {
             }
         }
         Ok(Self { samples, has_sun })
+    }
+
+    /// Attach Sun positions to an existing table.
+    ///
+    /// `track` must have the same length and the same time tags as the Moon
+    /// track the table was built from.  The table's `has_sun` flag becomes
+    /// `true` and every sample gains a Sun position, so the Sun term in
+    /// [`acceleration_with`] is enabled (and, because that term is tidal,
+    /// correctly framed for the Earth-Moon barycentre).
+    pub fn with_sun_track<I>(self, track: I) -> Result<Self, EphemerisError>
+    where
+        I: IntoIterator<Item = (f64, Vec3)>,
+    {
+        let sun_samples: Vec<(f64, Vec3)> = track.into_iter().collect();
+        if sun_samples.len() != self.samples.len() {
+            return Err(EphemerisError::InconsistentSun {
+                index: sun_samples.len().min(self.samples.len()),
+            });
+        }
+        let mut samples = self.samples.clone();
+        for (index, (t, sun)) in sun_samples.into_iter().enumerate() {
+            if !t.is_finite() || !sun.is_finite() {
+                return Err(EphemerisError::NonFinite { index });
+            }
+            if (t - samples[index].t).abs() > 1e-6 * samples[index].t.abs().max(1.0) {
+                return Err(EphemerisError::SunTimeMismatch { index });
+            }
+            samples[index].sun = Some(sun);
+        }
+        Self::new(samples)
     }
 
     /// Build a real-geometry table from a barycentric Moon track.
@@ -755,7 +793,15 @@ pub fn acceleration_with(r: Vec3, config: &Config, t: f64, ephemeris: &dyn Ephem
         let d_sun = r.sub(sun);
         let r_sun2 = d_sun.dot(d_sun) + eps2;
         if config.mu_sun > 0.0 && r_sun2 > 0.0 {
+            // Gravitational pull of the Sun at r.
             a = a.add(d_sun.scale(-config.mu_sun / (r_sun2 * r_sun2.sqrt())));
+            // The Earth-Moon barycentre is freely falling in the Sun's field, so
+            // the uniform part of the acceleration must be removed to leave the
+            // tidal term.  `sun` is the Sun's position in the same frame as r.
+            let origin2 = sun.dot(sun) + eps2;
+            if origin2 > 0.0 {
+                a = a.add(sun.scale(-config.mu_sun / (origin2 * origin2.sqrt())));
+            }
         }
     }
     if config.perturbation == 1 {
@@ -1914,6 +1960,58 @@ mod ephemeris_tests {
     }
 
     #[test]
+    fn with_sun_track_attaches_and_validates() {
+        let cfg = Config::default();
+        let samples: Vec<EphemerisSample> = (0..=3)
+            .map(|i| {
+                let t = i as f64 * 10.0;
+                let (earth, moon) = earth_moon_positions(t, &cfg);
+                EphemerisSample {
+                    t,
+                    earth,
+                    moon,
+                    sun: None,
+                }
+            })
+            .collect();
+        let table = TabulatedEphemeris::new(samples).unwrap();
+        assert!(!table.has_sun());
+
+        // Attaching a matching Sun track enables the Sun term.
+        let sun_track: Vec<(f64, Vec3)> = (0..=3)
+            .map(|i| (i as f64 * 10.0, Vec3::new(1.0e11, 0.0, 0.0)))
+            .collect();
+        let table = table.with_sun_track(sun_track).unwrap();
+        assert!(table.has_sun());
+        assert!(table.samples()[0].sun.is_some());
+
+        // Mismatched length is rejected.
+        let short = TabulatedEphemeris::new(vec![EphemerisSample {
+            t: 0.0,
+            earth: Vec3::ZERO,
+            moon: Vec3::ZERO,
+            sun: None,
+        }])
+        .unwrap();
+        assert!(short
+            .with_sun_track(vec![(0.0, Vec3::ZERO), (10.0, Vec3::ZERO)])
+            .is_err());
+
+        // Mismatched time is rejected.
+        let t2 = TabulatedEphemeris::new(vec![EphemerisSample {
+            t: 0.0,
+            earth: Vec3::ZERO,
+            moon: Vec3::ZERO,
+            sun: None,
+        }])
+        .unwrap();
+        assert!(matches!(
+            t2.with_sun_track(vec![(5.0, Vec3::ZERO)]),
+            Err(EphemerisError::SunTimeMismatch { index: 0 })
+        ));
+    }
+
+    #[test]
     fn tabulated_ephemeris_reproduces_the_analytic_trajectory() {
         let cfg = Config::default();
         let state = State {
@@ -1965,7 +2063,8 @@ mod ephemeris_tests {
 
         let r = Vec3::new(1.5e11 + 1.0e9, 0.0, 0.0);
         let a = acceleration_with(r, &cfg, 0.0, &table);
-        let expected = -K_MU_SUN / 1.0e18;
+        // Tidal acceleration: the Sun's pull at r minus its pull at the origin.
+        let expected = -K_MU_SUN / 1.0e18 - K_MU_SUN / (1.5e11 * 1.5e11);
         assert!(
             (a.x - expected).abs() / expected.abs() < 1e-12,
             "sun acceleration {}, expected {expected}",
@@ -1981,6 +2080,27 @@ mod ephemeris_tests {
             ..Config::default()
         };
         assert_eq!(acceleration_with(r, &no_sun, 0.0, &table), Vec3::ZERO);
+    }
+
+    #[test]
+    fn sun_term_is_tidal_at_the_origin() {
+        let cfg = Config {
+            mu_earth: 0.0,
+            mu_moon: 0.0,
+            mu_sun: K_MU_SUN,
+            ..Config::default()
+        };
+        let table = TabulatedEphemeris::new(vec![EphemerisSample {
+            t: 0.0,
+            earth: Vec3::ZERO,
+            moon: Vec3::ZERO,
+            sun: Some(Vec3::new(1.5e11, 0.0, 0.0)),
+        }])
+        .unwrap();
+        // At the barycentre the Sun's pull and the freely-falling frame's
+        // fictitious force cancel, so only the Earth/Moon terms (here zero)
+        // remain.
+        assert_eq!(acceleration_with(Vec3::ZERO, &cfg, 0.0, &table), Vec3::ZERO);
     }
 
     #[test]

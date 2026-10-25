@@ -25,8 +25,10 @@
 //! (the Sun, non-gravitational forces), which is what should be handed to the
 //! PINN.
 //!
-//! `--compare` propagates both and prints their RMS position/velocity
-//! residuals before writing the selected one.
+//! `--sun <csv>` attaches a Sun track (same solver frame, `t,x,y,z` columns)
+//! to the tabulated ephemeris and enables the (tidal) third-body term.  The
+//! default `mu_sun` is zero, so the Sun contributes nothing unless a track
+//! is supplied.
 //!
 //! The tabulated model is only meaningful with a reference that keeps the real
 //! Earth-Moon separation (`scripts/convert_reference.py --preserve-distance`).
@@ -38,7 +40,7 @@ use std::env;
 use std::error::Error;
 use std::fs;
 
-use dynamics::{propagate, propagate_with, Config, State, TabulatedEphemeris};
+use dynamics::{propagate, propagate_with, Config, State, TabulatedEphemeris, K_MU_SUN};
 use ingest::Telemetry;
 use residual::{residual_series, ResidualRow};
 use schema::Mission;
@@ -72,7 +74,7 @@ impl EphemerisModel {
 fn print_usage() {
     eprintln!(
         "usage: residual_pipeline <reference.csv> <out.csv> [mission.json]\n\
-                [--ephemeris analytic|tabulated] [--compare]"
+                [--ephemeris analytic|tabulated] [--sun <sun.csv>] [--compare]"
     );
 }
 
@@ -87,7 +89,48 @@ fn rms(rows: &[ResidualRow]) -> (f64, f64) {
     (position, velocity)
 }
 
-/// Whether the arc sits on a single radius to within floating-point noise.
+/// Load a Sun track from a CSV with at least `t,x,y,z` columns (metres).
+fn load_sun_track(path: &str) -> Result<Vec<(f64, dynamics::Vec3)>, Box<dyn Error>> {
+    let text = std::fs::read_to_string(path)?;
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let header = lines
+        .next()
+        .ok_or_else(|| format!("empty sun file: {path}"))?;
+    let columns: Vec<&str> = header.split(',').map(str::trim).collect();
+    let ti = columns
+        .iter()
+        .position(|c| *c == "t")
+        .ok_or_else(|| format!("sun CSV missing 't' column: {header}"))?;
+    let xi = columns
+        .iter()
+        .position(|c| *c == "x")
+        .ok_or_else(|| format!("sun CSV missing 'x' column: {header}"))?;
+    let yi = columns
+        .iter()
+        .position(|c| *c == "y")
+        .ok_or_else(|| format!("sun CSV missing 'y' column: {header}"))?;
+    let zi = columns
+        .iter()
+        .position(|c| *c == "z")
+        .ok_or_else(|| format!("sun CSV missing 'z' column: {header}"))?;
+
+    let mut out = Vec::new();
+    for (lineno, line) in lines.enumerate() {
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() <= ti.max(xi).max(yi).max(zi) {
+            return Err(format!("short row at line {}", lineno + 2).into());
+        }
+        let t: f64 = fields[ti].trim().parse()?;
+        let x: f64 = fields[xi].trim().parse()?;
+        let y: f64 = fields[yi].trim().parse()?;
+        let z: f64 = fields[zi].trim().parse()?;
+        out.push((t, dynamics::Vec3::new(x, y, z)));
+    }
+    if out.is_empty() {
+        return Err(format!("no data rows in {path}").into());
+    }
+    Ok(out)
+}
 ///
 /// `convert_reference.py` rescales every sample onto the propagator's nominal
 /// Earth-Moon distance by default.  Such an arc is circular by construction and
@@ -113,6 +156,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut positional = Vec::new();
     let mut model = EphemerisModel::Analytic;
     let mut compare = false;
+    let mut sun_path: Option<String> = None;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -122,6 +166,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .next()
                     .ok_or_else(|| "--ephemeris needs a value".to_string())?;
                 model = EphemerisModel::parse(&value)?;
+            }
+            "--sun" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--sun needs a path".to_string())?;
+                sun_path = Some(value);
             }
             "--compare" => compare = true,
             "--help" | "-h" => {
@@ -133,6 +183,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             other => positional.push(other.to_string()),
         }
+    }
+
+    if sun_path.is_some() && model == EphemerisModel::Analytic {
+        model = EphemerisModel::Tabulated;
+        eprintln!("note: --sun implies --ephemeris tabulated");
     }
 
     if positional.len() < 2 || positional.len() > 3 {
@@ -173,7 +228,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let steps = ((end_time - start_time) / dt).ceil() as usize;
 
-    let table = if model == EphemerisModel::Tabulated || compare {
+    let mut table = if model == EphemerisModel::Tabulated || compare || sun_path.is_some() {
         let table = TabulatedEphemeris::from_moon_track(
             samples.iter().map(|s| (s.t, s.state.r)),
             mu_earth,
@@ -186,6 +241,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
+
+    if let Some(path) = &sun_path {
+        let track = load_sun_track(path)?;
+        let attached = table
+            .take()
+            .expect("sun implies a tabulated table")
+            .with_sun_track(track)?;
+        println!("sun: attached {} samples from {}", attached.len(), path);
+        table = Some(attached);
+        config.mu_sun = K_MU_SUN;
+    }
 
     if model == EphemerisModel::Tabulated {
         let positions: Vec<dynamics::Vec3> = samples.iter().map(|s| s.state.r).collect();
@@ -225,8 +291,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             let table = table.as_ref().expect("tabulated model built a table");
             let (first, last) = table.time_span();
             println!(
-                "ephemeris: tabulated reference geometry ({} samples, t = [{first}, {last}] s)",
-                table.len()
+                "ephemeris: tabulated reference geometry ({} samples, t = [{first}, {last}] s){}",
+                table.len(),
+                if table.has_sun() { " + Sun" } else { "" }
             );
         }
     }

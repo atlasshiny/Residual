@@ -239,8 +239,10 @@ def to_solver_frame(
             "rotated so the epoch Moon vector is +x and the Moon's orbital "
             "angular momentum is +z"
         )
+        basis = (e1, e2, e3)
     else:
         notes["orientation"] = "kept Horizons J2000 ecliptic orientation"
+        basis = None
 
     converted = pd.DataFrame(
         {
@@ -262,7 +264,7 @@ def to_solver_frame(
         },
         "aligned": bool(align),
     }
-    return converted, {**notes, **checks}
+    return converted, {**notes, **checks}, basis
 
 
 def load_sidecar_meta(raw_path: Path) -> dict[str, object]:
@@ -399,6 +401,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="conversion mode: 'moon' (geocentric Moon -> barycentric solver "
         "frame, default) or 'generic' (arbitrary body, unit conversion only)",
     )
+    parser.add_argument(
+        "--sun-raw",
+        default=None,
+        help="optional raw Sun CSV to convert into the same solver frame",
+    )
+    parser.add_argument(
+        "--sun-out",
+        default="data/reference_sun.csv",
+        help="output Sun CSV (default: data/reference_sun.csv)",
+    )
     return parser.parse_args(argv)
 
 
@@ -410,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         raw, step_seconds = load_raw(raw_path)
-        reference, conversion = to_solver_frame(
+        reference, conversion, basis = to_solver_frame(
             raw,
             preserve_distance=args.preserve_distance,
             align=not args.no_align,
@@ -426,6 +438,38 @@ def main(argv: list[str] | None = None) -> int:
         manifest_path.write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
+
+        if args.sun_raw:
+            sun_raw_path = _resolve(args.sun_raw)
+            sun_out_path = _resolve(args.sun_out)
+            sun_raw_df, _ = load_raw(sun_raw_path)
+            # Convert km -> m, apply the same rotation as the Moon.
+            sun_times = [float(row.t) for row in sun_raw_df.itertuples(index=False)]
+            sun_positions = [
+                _scale((float(row.x), float(row.y), float(row.z)), 1000.0)
+                for row in sun_raw_df.itertuples(index=False)
+            ]
+            if basis is not None:
+                e1, e2, e3 = basis
+                def rotate(v):
+                    return (
+                        _dot(v, e1), _dot(v, e2), _dot(v, e3)
+                    )
+                sun_positions = [rotate(v) for v in sun_positions]
+            sun_frame = pd.DataFrame(
+                {
+                    "t": sun_times,
+                    "x": [v[0] for v in sun_positions],
+                    "y": [v[1] for v in sun_positions],
+                    "z": [v[2] for v in sun_positions],
+                }
+            )
+            sun_out_path.parent.mkdir(parents=True, exist_ok=True)
+            sun_frame.to_csv(sun_out_path, index=False, float_format="%.12g")
+            print(
+                f"wrote {len(sun_frame)} sun samples to {sun_out_path} "
+                f"(frame={'aligned' if basis is not None else 'ecliptic'})"
+            )
     except (RuntimeError, ValueError, OSError) as exc:
         print(f"convert_reference: {exc}", file=sys.stderr)
         return 1

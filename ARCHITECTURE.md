@@ -91,7 +91,7 @@ make residual-tabulated      # writes data/residual_table_tabulated.csv
 make train DATA=data/residual_table_tabulated.csv
 ```
 
-The tabulated path needs a reference that keeps the real separation (`scripts/convert_reference.py --preserve-distance`); the default `data/reference.csv` is rescaled onto the circular radius and is intended for the analytic model. The example warns when it detects such a constant-radius arc. With the 30-day Horizons arc, the measured-geometry model cuts the RMS position residual by roughly 4.5× (64,800 km → 14,400 km); the remainder is dominated by the unmodelled solar perturbation, while the fixed-step integrator itself contributes about 1.4 km RMS (velocity Verlet at 600 s versus an adaptive DOP853 solve of the same force model).
+The tabulated path needs a reference that keeps the real separation (`scripts/convert_reference.py --preserve-distance`); the default `data/reference.csv` is rescaled onto the circular radius and is intended for the analytic model. The example warns when it detects such a constant-radius arc. The tabulated path needs a reference that keeps the real separation (`scripts/convert_reference.py --preserve-distance`); the default `data/reference.csv` is rescaled onto the circular radius and is intended for the analytic model. The example warns when it detects such a constant-radius arc. With the 30-day Horizons arc, the measured-geometry model cuts the RMS position residual by roughly 4.5× (64,800 km → 14,400 km) and attaching the Sun as a tidal third body cuts it again to ~12 km (integrator error ~1.4 km).
 
 ### 4.2 PINN branch (`ml/pinn/`)
 
