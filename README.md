@@ -119,6 +119,10 @@ Presets fill a 400 km LEO orbit and an approximate translunar injection. The for
 
 Current limitations: the propagator uses the analytic circular Earth–Moon ephemeris (no SPICE kernels in Rust), there is no finite-thrust, atmosphere, or launch model yet, and Earth-centred inputs are converted with the Earth's position at the start epoch but do not subtract its ~12 m/s barycentric velocity. Those approximation notes are documented in [`docs/mission-runner.md`](docs/mission-runner.md) and in the crate docs.
 
+### Generalization Roadmap
+
+The correction models currently train on one 30-day Moon arc and report a random-split R², which measures interpolation rather than transfer. [`docs/generalization-plan.md`](docs/generalization-plan.md) lays out the path to a genuinely generalized model: temporal and mission-level holdouts, state-based features instead of time, acceleration-residual targets, multi-arc training data, uncertainty/OOD gating, and a benchmark suite. It also lists the P0 work that should be done before quoting any model as "generalized."
+
 ### Make Targets
 
 | Target | Description |
