@@ -4,6 +4,7 @@ import { settings, save, reset, pullFrom } from "./settings.js";
 
 /* ---------------- DOM refs ---------------- */
 const viewport = document.getElementById("viewport");
+const sceneCaption = document.getElementById("scene-caption");
 const loadingOverlay = document.getElementById("loading-overlay");
 const errorBanner = document.getElementById("error-banner");
 const sceneStatus = document.getElementById("scene-status");
@@ -93,12 +94,14 @@ let residualChart = {};
 let orbitPlaying = false;
 let orbitAcc = 0;
 let orbitLastTick = null;
-let orbitMarker = null;
+let traveledLine = null;
+let traveledTubeRef = null;
 let trajectoryData = null;
 let trajRadius = 0;
 let orbitPlane = null;
 let ensembleEpoch = -1;
 const resetViewBtn = document.getElementById("reset-view");
+const topViewBtn = document.getElementById("top-view");
 
 /* cosmos viewer */
 const modeTabs = document.getElementById("mode-tabs");
@@ -214,21 +217,40 @@ function radialSpriteTexture() {
   return texture;
 }
 
-function sunLabelTexture() {
+const labelTextureCache = new Map();
+function bodyLabelTexture(title, subtitle = "", color = "255,240,200") {
+  const key = `${title}|${subtitle}|${color}`;
+  if (labelTextureCache.has(key)) return labelTextureCache.get(key);
   const canvas = document.createElement("canvas");
   canvas.width = 256;
   canvas.height = 128;
   const ctx = canvas.getContext("2d");
   ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(255,240,200,0.95)";
-  ctx.font = "600 44px system-ui, -apple-system, sans-serif";
-  ctx.fillText("SUN", 128, 54);
-  ctx.fillStyle = "rgba(253,230,138,0.7)";
-  ctx.font = "400 24px system-ui, -apple-system, sans-serif";
-  ctx.fillText("not to scale", 128, 92);
+  ctx.fillStyle = `rgba(${color},0.95)`;
+  ctx.font = subtitle
+    ? "600 44px system-ui, -apple-system, sans-serif"
+    : "600 48px system-ui, -apple-system, sans-serif";
+  ctx.fillText(title, 128, subtitle ? 54 : 68);
+  if (subtitle) {
+    ctx.fillStyle = "rgba(253,230,138,0.7)";
+    ctx.font = "400 24px system-ui, -apple-system, sans-serif";
+    ctx.fillText(subtitle, 128, 92);
+  }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  labelTextureCache.set(key, texture);
   return texture;
+}
+
+function labelSprite(title, subtitle, color) {
+  return new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: bodyLabelTexture(title, subtitle, color),
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+    })
+  );
 }
 
 const sunGroup = new THREE.Group();
@@ -254,14 +276,7 @@ const sunGlow = new THREE.Sprite(
 );
 sunGroup.add(sunGlow);
 
-const sunLabel = new THREE.Sprite(
-  new THREE.SpriteMaterial({
-    map: sunLabelTexture(),
-    transparent: true,
-    depthWrite: false,
-    fog: false,
-  })
-);
+const sunLabel = labelSprite("SUN", "not to scale");
 sunGroup.add(sunLabel);
 
 const sunBeam = new THREE.Line(
@@ -277,6 +292,84 @@ const sunBeam = new THREE.Line(
 );
 sunBeam.visible = false;
 scene.add(sunBeam);
+
+/* Earth and Moon markers.  At lunar-orbit scale the true bodies are only a
+   few pixels wide (Earth is ~1.7% of the orbit radius), so the display radii
+   are enlarged the same way scripts/render_guide.py does; the viewport
+   caption says so. */
+const EARTH_DISPLAY = 0.045; // fraction of the trajectory radius
+const MOON_DISPLAY = 0.022;
+
+const earthLabel = labelSprite("EARTH", "", "191,219,254");
+earthLabel.visible = false;
+scene.add(earthLabel);
+
+const moonGroup = new THREE.Group();
+moonGroup.visible = false;
+scene.add(moonGroup);
+
+const moonBody = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 48, 48),
+  new THREE.MeshStandardMaterial({
+    color: 0xb7bcc4,
+    roughness: 0.95,
+    metalness: 0.05,
+    emissive: 0x2a2f3a,
+    emissiveIntensity: 0.45,
+  })
+);
+moonGroup.add(moonBody);
+
+const moonGlow = new THREE.Sprite(
+  new THREE.SpriteMaterial({
+    map: radialSpriteTexture(),
+    color: 0x9fb4d6,
+    transparent: true,
+    opacity: 0.28,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    fog: false,
+  })
+);
+moonGroup.add(moonGlow);
+
+const moonLabel = labelSprite("MOON", "", "226,232,240");
+moonGroup.add(moonLabel);
+
+/* Static starfield: the guide renderer paints stars, and they make the
+   lunar-scale scene read as space rather than a CAD viewport. */
+function makeStarField() {
+  const count = 1600;
+  const positions = new Float32Array(count * 3);
+  let state = 0x2f6e2b1;
+  const rand = () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+  for (let i = 0; i < count; i++) {
+    const z = rand() * 2 - 1;
+    const theta = rand() * Math.PI * 2;
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    positions[i * 3] = r * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(theta);
+    positions[i * 3 + 2] = z;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const material = new THREE.PointsMaterial({
+    color: 0xcfe0ff,
+    size: 1.6,
+    sizeAttenuation: false,
+    transparent: true,
+    opacity: 0.75,
+    depthWrite: false,
+    fog: false,
+  });
+  return new THREE.Points(geometry, material);
+}
+const starGroup = makeStarField();
+starGroup.visible = false;
+scene.add(starGroup);
 
 /* grid + axes */
 const grid = new THREE.GridHelper(40000, 40, 0x1f2a4a, 0x121a33);
@@ -325,6 +418,7 @@ function applySceneScale(radius) {
 function fitCameraToTrajectory(radius) {
   const R = Math.max(radius || trajRadius || 20000, 1);
   trajRadius = R;
+  camera.up.set(0, 1, 0);
   camera.near = Math.max(0.5, R * 0.00002);
   camera.far = Math.max(camera.far, R * 20);
   camera.updateProjectionMatrix();
@@ -335,6 +429,7 @@ function fitCameraToTrajectory(radius) {
   controls.update();
   applySceneScale(R);
   updateSunGeometry(R);
+  updateBodyGeometry(R);
 }
 function fitCameraToCosmos() {
   // Poses were already rescaled into the scene by buildCosmosScene().
@@ -349,6 +444,29 @@ function fitCameraToCosmos() {
   controls.minDistance = R * 0.05;
   controls.maxDistance = R * 20;
   camera.position.set(R * 0.35, R * 1.0, R * 2.0);
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+/* Frame the arc straight down the orbit normal — the 2D framing used by
+   scripts/render_guide.py.  ``orbitPlane.c`` is the least-spanning axis, so
+   looking along it shows the full ellipse instead of a foreshortened edge.
+   ``camera.up`` has to avoid the view axis or lookAt() degenerates. */
+function fitCameraTopDown() {
+  const R = Math.max(trajRadius || 20000, 1);
+  const c = orbitPlane?.c ?? 2;
+  const normal = new THREE.Vector3(0, 0, 0);
+  normal.setComponent(c, 1);
+  const up = new THREE.Vector3(0, 0, 0);
+  up.setComponent(c === 1 ? 2 : 1, 1);
+  camera.up.copy(up);
+  camera.near = Math.max(0.5, R * 0.00002);
+  camera.far = Math.max(camera.far, R * 20);
+  camera.updateProjectionMatrix();
+  controls.minDistance = R * 0.02;
+  controls.maxDistance = R * 20;
+  // Half the arc's vertical extent is ~R; tan(25 deg) for the 50 deg fov.
+  camera.position.copy(normal).multiplyScalar(R * 2.35);
   controls.target.set(0, 0, 0);
   controls.update();
 }
@@ -371,6 +489,26 @@ function updateSunGeometry(radius) {
   sunBeam.computeLineDistances();
 }
 
+/* Re-lay the body markers for the current scene scale.  The radii are display
+   sizes (fractions of the trajectory radius), not physical radii, so Earth and
+   the Moon stay visible on a lunar-orbit view. */
+function updateBodyGeometry(radius) {
+  const R = Math.max(radius || 1, 1);
+  const earthScale = (R * EARTH_DISPLAY) / EARTH_RADIUS;
+  earth.scale.setScalar(earthScale);
+  atmosphere.scale.setScalar(earthScale);
+  halo.scale.setScalar(earthScale);
+  earthLabel.scale.set(R * 0.16, R * 0.08, 1);
+  earthLabel.position.set(0, R * 0.085, 0);
+
+  moonBody.scale.setScalar(R * MOON_DISPLAY);
+  moonGlow.scale.setScalar(R * MOON_DISPLAY * 3.2);
+  moonLabel.scale.set(R * 0.13, R * 0.065, 1);
+  moonLabel.position.set(0, R * (MOON_DISPLAY * 1.6 + 0.03), 0);
+
+  starGroup.scale.setScalar(R * 8);
+}
+
 function applySunSample(index) {
   if (!sunAvailable || !Array.isArray(sunDirections) || !sunDirections.length) return;
   const i = Math.min(Math.max(index | 0, 0), sunDirections.length - 1);
@@ -383,10 +521,13 @@ function applySunSample(index) {
   updateSunGeometry(trajRadius);
 }
 
-function setSunVisible() {
-  const on = mode === "orbit" && !!showSunCb?.checked && sunAvailable;
-  sunGroup.visible = on;
-  sunBeam.visible = on;
+function setOrbitPropsVisible() {
+  const orbit = mode === "orbit";
+  sunGroup.visible = orbit && !!showSunCb?.checked && sunAvailable;
+  sunBeam.visible = sunGroup.visible;
+  starGroup.visible = orbit;
+  earthLabel.visible = orbit;
+  moonGroup.visible = orbit && !!trajectoryData?.points?.length;
 }
 
 /* ---------------- helpers ---------------- */
@@ -493,10 +634,12 @@ async function loadTrajectory() {
     if (c.material) (Array.isArray(c.material) ? c.material : [c.material]).forEach((m) => m?.dispose?.());
   }
   ensemblePoints = null;
-  orbitMarker = null;
+  traveledLine = null;
+  traveledTubeRef = null;
   ensembleEpoch = -1;
+  moonGroup.visible = false;
   sunAvailable = false;
-  setSunVisible();
+  setOrbitPropsVisible();
   setDot(trajDot, "loading");
   try {
     const response = await fetch(src);
@@ -517,7 +660,7 @@ async function loadTrajectory() {
     if (showSunCb) showSunCb.disabled = !sunAvailable;
     if (sunAvailable) applySunSample(0);
     else sunDirection = null;
-    setSunVisible();
+    setOrbitPropsVisible();
 
     // glowing tube along curve
     let maxR = 0, minR = Infinity;
@@ -547,35 +690,57 @@ async function loadTrajectory() {
       points.length > 2 && points[0].distanceTo(points[points.length - 1]) <= maxR * 0.01;
     const curvePoints = closedLoop ? points.slice(0, -1) : points;
     const curve = new THREE.CatmullRomCurve3(curvePoints, closedLoop, "centripetal");
-    const tubeRadius = Math.max(20, maxR * 0.003);
-    const tube = new THREE.TubeGeometry(curve, Math.max(points.length * 2, 64), tubeRadius, 12, false);
+    const tubeRadius = Math.max(20, maxR * 0.0035);
+    const tubularSegments = Math.max(points.length * 2, 64);
+    // Planned path: thin and faint, like the ghosted full path in
+    // scripts/render_guide.py.
+    const tube = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius * 0.7, 12, false);
     const tubeMat = new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
       emissive: 0xf59e0b,
-      emissiveIntensity: 1.2,
+      emissiveIntensity: 0.6,
       roughness: 0.3,
       metalness: 0.1,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.4,
     });
     const tubeMesh = new THREE.Mesh(tube, tubeMat);
     trajGroup.add(tubeMesh);
 
-    // core line for crispness
-    const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
-    const line = new THREE.Line(
-      lineGeo,
-      new THREE.LineBasicMaterial({ color: 0xfde68a, transparent: true, opacity: 0.9 })
+    // Traveled portion: the same curve with a fatter, brighter tube that grows
+    // as playback advances.  TubeGeometry emits its indices in path order
+    // (radialSegments*6 per tubular segment), so the trail is just a capped
+    // draw range over a second tube.
+    const traveledTube = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, tubularSegments, tubeRadius * 1.5, 12, false),
+      new THREE.MeshStandardMaterial({
+        color: 0xffd27a,
+        emissive: 0xffb733,
+        emissiveIntensity: 1.4,
+        roughness: 0.35,
+        metalness: 0.1,
+        transparent: true,
+        opacity: 0.95,
+      })
     );
-    trajGroup.add(line);
+    traveledTube.userData.indexPerSegment = 12 * 6;
+    traveledTube.userData.tubularSegments = tubularSegments;
+    traveledTube.geometry.setDrawRange(0, 12 * 6);
+    trajGroup.add(traveledTube);
 
-    // head marker
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(Math.max(40, maxR * 0.012), 24, 24),
-      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    const fullLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({ color: 0xfde68a, transparent: true, opacity: 0.22 })
     );
-    head.position.copy(points[points.length - 1]);
-    trajGroup.add(head);
+    trajGroup.add(fullLine);
+
+    traveledLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({ color: 0xfff7d6, transparent: true, opacity: 1 })
+    );
+    traveledLine.geometry.setDrawRange(0, 1);
+    trajGroup.add(traveledLine);
+    traveledTubeRef = traveledTube;
 
     // overlays (optional)
     const overlaySpecs = [
@@ -594,13 +759,8 @@ async function loadTrajectory() {
       trajGroup.add(line);
     }
 
-    // orbit playback marker
-    orbitMarker = new THREE.Mesh(
-      new THREE.SphereGeometry(Math.max(36, maxR * 0.009), 20, 20),
-      new THREE.MeshBasicMaterial({ color: 0x67e8f9 })
-    );
-    orbitMarker.position.copy(points[0]);
-    trajGroup.add(orbitMarker);
+    // Moon marker at the current epoch.
+    moonGroup.position.copy(points[0]);
 
     // slider range
     if (orbitSlider) { orbitSlider.max = String(Math.max(points.length - 1, 1)); orbitSlider.value = "0"; }
@@ -1530,10 +1690,15 @@ function updateViewForMode() {
   // around Earth), so grid size and zoom limits have to follow the mode.
   if (mode === "cosmos") {
     applySceneScale(EARTH_RADIUS * 10);
+    // Cosmos poses use the physical Earth, not the enlarged orbit-view marker.
+    earth.scale.setScalar(1);
+    atmosphere.scale.setScalar(1);
+    halo.scale.setScalar(1);
     if (cosmos.loaded) fitCameraToCosmos();
   } else if (trajRadius) {
     applySceneScale(trajRadius);
     updateSunGeometry(trajRadius);
+    updateBodyGeometry(trajRadius);
     controls.minDistance = trajRadius * 0.02;
     controls.maxDistance = trajRadius * 20;
   }
@@ -1543,7 +1708,10 @@ function updateViewForMode() {
   if (mode !== "cosmos") frameRender.classList.add("is-hidden");
   else if (cosmos.loaded) updateFrameImage(cosmos.current);
   grid.visible = showGridCb.checked;
-  setSunVisible();
+  // The orbit view enlarges bodies and compresses the Sun distance; Cosmos
+  // frames are already to-scale renders, so the caption only applies here.
+  sceneCaption?.classList.toggle("is-hidden", mode !== "orbit");
+  setOrbitPropsVisible();
 }
 modeTabs.addEventListener("click", (ev) => {
   const tab = ev.target.closest(".mode-tab");
@@ -1581,7 +1749,7 @@ showGridCb.addEventListener("change", () => {
 showAxesCb.addEventListener("change", () => {
   axes.visible = showAxesCb.checked;
 });
-showSunCb?.addEventListener("change", setSunVisible);
+showSunCb?.addEventListener("change", setOrbitPropsVisible);
 orbitPlayBtn?.addEventListener("click", orbitPlayToggle);
 orbitSlider?.addEventListener("input", () => stepOrbit(0));
 
@@ -1600,6 +1768,13 @@ resetViewBtn.addEventListener("click", () => {
   } else {
     fitCameraToTrajectory(trajRadius);
   }
+});
+topViewBtn?.addEventListener("click", () => {
+  if (mode !== "orbit" || !trajectoryData?.points?.length) return;
+  // A spinning top-down view is useless; the guide framing is static.
+  controls.autoRotate = false;
+  if (autoRotateCb) autoRotateCb.checked = false;
+  fitCameraTopDown();
 });
 
 showPropCb?.addEventListener("change", () => {
@@ -1659,17 +1834,12 @@ settingsOverlay.addEventListener("click", (ev) => {
 window.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && !settingsOverlay.classList.contains("is-hidden")) { closeSettings(); return; }
   if (settingsOverlay && !settingsOverlay.classList.contains("is-hidden")) return;
-  if (ev.key === " ") { ev.preventDefault(); if (mode === "cosmos") { cosmos.playing = !cosmos.playing; playBtn.textContent = cosmos.playing ? "⏸" : "▶"; } else { orbitPlayToggle(); } }
-  else if (ev.key === "ArrowRight") { if (mode === "cosmos") { cosmos.current = Math.min(cosmos.frames - 1, cosmos.current + 1); updateFrameUI(cosmos.current); } else stepOrbit(1); }
-  else if (ev.key === "ArrowLeft") { if (mode === "cosmos") { cosmos.current = Math.max(0, cosmos.current - 1); updateFrameUI(cosmos.current); } else stepOrbit(-1); }
+  if (ev.key === " ") { ev.preventDefault(); orbitPlayToggle(); }
+  else if (ev.key === "ArrowRight") { stepOrbit(1); }
+  else if (ev.key === "ArrowLeft") { stepOrbit(-1); }
   else if (ev.key === "1") { mode = "orbit"; updateViewForMode(); }
-  else if (ev.key === "2") { mode = "cosmos"; updateViewForMode(); }
   else if (ev.key === "f" || ev.key === "F") {
-    if (mode === "cosmos" && cosmos.loaded) {
-      fitCameraToCosmos();
-    } else {
-      fitCameraToTrajectory(trajRadius);
-    }
+    fitCameraToTrajectory(trajRadius);
   }
 });
 
@@ -1713,7 +1883,15 @@ function setOrbitIndex(idx, { syncEnsemble = true } = {}) {
   if (!pts.length) return 0;
   idx = Math.max(0, Math.min(pts.length - 1, idx | 0));
   if (orbitSlider) orbitSlider.value = String(idx);
-  if (orbitMarker) orbitMarker.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
+  moonGroup.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
+  if (traveledLine) traveledLine.geometry.setDrawRange(0, idx + 1);
+  if (traveledTubeRef) {
+    const { indexPerSegment, tubularSegments } = traveledTubeRef.userData;
+    // Map the sample index onto the resampled tube's path parameter.
+    const t = pts.length > 1 ? idx / (pts.length - 1) : 0;
+    const seg = Math.max(1, Math.round(t * tubularSegments));
+    traveledTubeRef.geometry.setDrawRange(0, seg * indexPerSegment);
+  }
   if (orbitTimeEl) {
     const t = Array.isArray(trajectoryData.times) ? trajectoryData.times[idx] : idx;
     orbitTimeEl.textContent = `t = ${Number(t).toFixed(2)} s`;

@@ -33,7 +33,6 @@
         <div class="topbar-center">
           <nav class="mode-tabs" id="mode-tabs" aria-label="Viewer mode">
             <button class="mode-tab is-active" data-mode="orbit" type="button">Orbit</button>
-            <button class="mode-tab" data-mode="cosmos" type="button">Cosmos job</button>
           </nav>
           <span class="chip" id="scene-status">Initializing scene…</span>
         </div>
@@ -54,6 +53,7 @@
             <input type="checkbox" id="show-sun" checked />
             <span>Sun</span>
           </label>
+          <button id="top-view" class="btn ghost" title="Look straight down the orbit normal (the guide renderer's framing)">Top view</button>
           <button id="reset-view" class="btn ghost">Reset view</button>
           <button id="open-settings" class="btn ghost settings-btn" aria-haspopup="dialog" title="Settings">
             <svg class="gear" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
@@ -159,57 +159,6 @@
           <pre id="pipeline-log" class="pipeline-log"></pre>
         </section>
 
-        <section class="card" id="cosmos-card" data-mode-panel="cosmos">
-          <div class="card-head">
-            <h2>Cosmos job</h2>
-            <span class="status-dot" id="cosmos-dot"></span>
-          </div>
-          <div class="btn-row">
-            <button id="load-job-btn" class="btn primary" type="button">Open folder…</button>
-            <button id="load-demo-btn" class="btn ghost" type="button">Load demo job</button>
-            <input
-              type="file"
-              id="job-dir-input"
-              webkitdirectory
-              directory
-              multiple
-              class="file-input"
-              aria-label="Select a Cosmos job directory"
-            />
-          </div>
-          <p id="cosmos-status" class="status-text">No job loaded — open a job directory.</p>
-          <dl class="kv" id="cosmos-kv"></dl>
-
-          <h3 class="subhead">Frame</h3>
-          <div class="frame-info" id="cosmos-frame-info">
-            <p class="frame-empty" id="frame-empty-note">Scrub a frame to inspect its pose.</p>
-            <dl class="kv frame-meta" id="cosmos-frame-meta"></dl>
-            <code id="cosmos-pose-matrix" class="pose-matrix">—</code>
-          </div>
-
-          <h3 class="subhead">Metrics</h3>
-          <dl class="kv" id="cosmos-metrics"></dl>
-
-          <h3 class="subhead">Frames</h3>
-          <div class="filmstrip" id="filmstrip"></div>
-
-          <h3 class="subhead">Job queue</h3>
-          <div class="btn-row">
-            <input type="text" id="job-base" class="settings-input" placeholder="./data/demo_job/" />
-            <button id="scan-jobs-btn" class="btn ghost" type="button">Scan</button>
-          </div>
-          <ul id="job-list" class="job-list"></ul>
-
-          <div class="btn-row">
-            <button id="export-snapshot-btn" class="btn ghost" type="button">Export snapshot</button>
-            <button id="export-report-btn" class="btn ghost" type="button">Export report</button>
-          </div>
-
-          <details class="raw-json">
-            <summary>manifest.json</summary>
-            <pre id="cosmos-manifest-raw"></pre>
-          </details>
-        </section>
       </aside>
 
       <main id="viewport">
@@ -218,6 +167,7 @@
           <p>Loading scene &amp; data…</p>
         </div>
         <div id="error-banner" class="error-banner" hidden></div>
+        <p id="scene-caption" class="scene-caption">Bodies and Sun enlarged · distances compressed · not to scale</p>
 
         <div id="frame-render" class="frame-render is-hidden">
           <img id="frame-img" alt="Rendered frame" draggable="false" />

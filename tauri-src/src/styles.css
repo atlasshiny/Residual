@@ -359,6 +359,19 @@ html, body {
 }
 #viewport canvas { display: block; width: 100%; height: 100%; }
 
+.scene-caption {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: rgba(148, 163, 184, 0.75);
+  pointer-events: none;
+  z-index: 2;
+}
+body.light .scene-caption { color: rgba(51, 65, 85, 0.7); }
+
 .overlay {
   position: absolute;
   inset: 0;
