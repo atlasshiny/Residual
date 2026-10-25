@@ -35,8 +35,9 @@ for arg in "$@"; do
     esac
 done
 
-EXTRAS="dev,data"
-if $GPU; then EXTRAS="dev,data,gpu"; fi
+# PyTorch is required by the PINN/MLP training step (step 5), so the gpu
+# extra is included by default. --gpu is kept for backwards compatibility.
+EXTRAS="dev,data,gpu"
 
 echo "============================================================"
 echo "  GatorHacks-V: Setup & Pipeline"
@@ -86,10 +87,10 @@ fi
 echo ""
 echo "[5/5] Training PINN / MLP / SINDy / LinearReg..."
 if [ -f data/residual_table.csv ]; then
-    uv run --extra data python -m ml.pinn.run --data data/residual_table.csv
+    uv run --extra data --extra gpu python -m ml.pinn.run --data data/residual_table.csv
 else
     echo "  No residual_table.csv. Running synthetic demo..."
-    uv run --extra data python -m ml.pinn.demo
+    uv run --extra data --extra gpu python -m ml.pinn.demo
 fi
 
 echo ""
@@ -102,10 +103,6 @@ echo "============================================================"
 if $RUN_TESTS; then
     echo ""
     echo "Running test suite..."
-    if $GPU; then
-        uv run --extra dev --extra data --extra gpu pytest -q tests ml
-    else
-        uv run --extra dev --extra data pytest -q tests ml
-    fi
+    uv run --extra dev --extra data --extra gpu pytest -q tests ml
     cargo test --workspace 2>/dev/null || true
 fi

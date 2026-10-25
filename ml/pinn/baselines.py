@@ -88,7 +88,7 @@ class MLP(nn.Module if HAS_TORCH else object):
             X_val_t, Y_val_t = None, None
 
         for epoch in range(1, epochs + 1):
-            self.train()
+            super().train()
             optimizer.zero_grad()
             pred = self.net(X_t)
             loss = criterion(pred, Y_t)
@@ -115,6 +115,16 @@ class MLP(nn.Module if HAS_TORCH else object):
         if best_state is not None:
             self.load_state_dict(best_state)
         return self
+
+    def train(self, *args, **kwargs):
+        # Preserve torch.nn.Module.train(mode=...) used by eval()/train() mode
+        # switching, while also exposing the data-training API expected by
+        # callers/tests under the name ``train``.
+        if len(args) == 1 and isinstance(args[0], bool) and not kwargs:
+            return super().train(*args, **kwargs)
+        if len(args) == 0 and set(kwargs).issubset({"mode"}):
+            return super().train(**kwargs)
+        return self.fit(*args, **kwargs)
 
 
 # --- SINDy remains numpy-based as it is not a gradient-descent problem ---

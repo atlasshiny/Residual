@@ -11,7 +11,6 @@ from .baselines import (
 from .baselines import mse as baseline_mse
 from .dataset import apply_burn_mask, burn_keep_mask
 from .pinn import PINN, train_pinn
-from .run import build_parser, run
 
 __all__ = [
     "MLP",
@@ -19,11 +18,9 @@ __all__ = [
     "_poly_features",
     "apply_burn_mask",
     "baseline_mse",
-    "build_parser",
     "burn_keep_mask",
     "poly_terms",
     "poly_transform",
-    "run",
     "sindy",
     "sindy_predict",
     "train",
