@@ -78,8 +78,13 @@ scene.fog = new THREE.FogExp2(0x050816, 0.00002);
 const camera = new THREE.PerspectiveCamera(55, 1, 1, 10000000);
 camera.position.set(0, 6000, 22000);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({
+  antialias: false,
+  alpha: false,
+  stencil: false,
+  powerPreference: "high-performance",
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(10, 10);
 viewport.appendChild(renderer.domElement);
 
@@ -90,6 +95,7 @@ viewport.appendChild(renderer.domElement);
    This keeps idle CPU/GPU near zero, which matters most on low-end machines
    and battery-powered laptops. */
 let needsRender = true;
+let cameraMoving = false;
 let windowFocused = !document.hidden;
 function requestRender() {
   needsRender = true;
@@ -676,7 +682,7 @@ function resetTrajectoryScene() {
    not turn into an enormous tube mesh.  The full point list stays in
    `trajectoryData` for markers, timing, charts, and the playback slider. */
 const MAX_TRAJECTORY_RENDER_POINTS = 4000;
-const MAX_TUBULAR_SEGMENTS = 4096;
+const MAX_TUBULAR_SEGMENTS = 2048;
 
 function downsampleArray(items, maxItems) {
   if (items.length <= maxItems) return items;
@@ -750,7 +756,7 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
   );
   // Planned path: thin and faint, like the ghosted full path in
   // scripts/render_guide.py.
-  const tube = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius * 0.7, 12, false);
+  const tube = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius * 0.7, 8, false);
   const tubeMat = new THREE.MeshStandardMaterial({
     color: 0xf59e0b,
     emissive: 0xf59e0b,
@@ -768,7 +774,7 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
   // (radialSegments*6 per tubular segment), so the trail is just a capped
   // draw range over a second tube.
   const traveledTube = new THREE.Mesh(
-    new THREE.TubeGeometry(curve, tubularSegments, tubeRadius * 1.5, 12, false),
+    new THREE.TubeGeometry(curve, tubularSegments, tubeRadius * 1.5, 8, false),
     new THREE.MeshStandardMaterial({
       color: 0xffd27a,
       emissive: 0xffb733,
@@ -1622,7 +1628,11 @@ function animate(now) {
   // (damping / auto-rotate) and false once the view has settled.  Skip it
   // entirely when the window is unfocused so auto-rotate doesn't silently
   // keep moving the camera in the background.
-  const cameraMoved = windowFocused ? controls.update() : false;
+  const interacting = controls.state !== -1;
+  const shouldUpdateControls =
+    windowFocused && (interacting || controls.autoRotate || cameraMoving);
+  const cameraMoved = shouldUpdateControls ? controls.update() : false;
+  cameraMoving = cameraMoved;
   const playing = orbitPlaying && (trajectoryData?.points?.length ?? 0) > 1;
   if (playing && windowFocused) updateOrbitPlayback(dt);
 
