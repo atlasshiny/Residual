@@ -17,7 +17,9 @@ namespace {
 // keeps the kernel valid for batches larger than the launch grid. When
 // trajectory is non-null, frame 0 is the initial state and frame step + 1 is
 // written after each integration step.
-__global__ void multibody_kernel(MbsState* states, int num_bodies, int num_steps, MbsConfig config, MbsState* trajectory) {
+__global__ void __launch_bounds__(MBS_THREADS_PER_BLOCK)
+multibody_kernel(MbsState* __restrict__ states, int num_bodies, int num_steps,
+                 MbsConfig config, MbsState* __restrict__ trajectory) {
     const int stride = blockDim.x * gridDim.x;
 
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < num_bodies;
@@ -26,6 +28,15 @@ __global__ void multibody_kernel(MbsState* states, int num_bodies, int num_steps
         MbsState state = states[i];
         double t = config.epoch;
 
+        // Burns are scheduled on integration steps.  Precompute the nearest
+        // step once per particle so the hot loop avoids a floating-point
+        // comparison against every burn on every step.
+        int burn_steps[8];
+        for (int b = 0; b < config.num_burns && b < 8; ++b) {
+            burn_steps[b] = static_cast<int>(std::llround(
+                (config.burns[b].t - config.epoch) / config.dt));
+        }
+
         if (trajectory != nullptr) {
             trajectory[i] = state;  // frame 0
         }
@@ -33,7 +44,8 @@ __global__ void multibody_kernel(MbsState* states, int num_bodies, int num_steps
         for (int step = 0; step < num_steps; ++step) {
             // Apply impulsive burns firing at this step's start time.
             for (int b = 0; b < config.num_burns && b < 8; ++b) {
-                if (std::fabs(t - config.burns[b].t) < 0.5 * config.dt) {
+                if (step == burn_steps[b] &&
+                    std::fabs(t - config.burns[b].t) < 0.5 * config.dt) {
                     state.v.x += config.burns[b].dvx;
                     state.v.y += config.burns[b].dvy;
                     state.v.z += config.burns[b].dvz;
@@ -165,7 +177,7 @@ void mbs_default_config(MbsConfig* config) {
 
 // Host orchestration: validate, size buffers, upload, launch, download.
 // The call is synchronous and returns the raw cudaError_t value.
-int mbs_propagate(const MbsState* initial_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* final_states, MbsState* trajectory) {
+int mbs_propagate(const MbsState* __restrict__ initial_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* __restrict__ final_states, MbsState* __restrict__ trajectory) {
     if (initial_states == nullptr || !valid_config(config) ||
         num_bodies <= 0 || num_steps < 0) {
         return static_cast<int>(cudaErrorInvalidValue);
@@ -225,7 +237,7 @@ int mbs_propagate(const MbsState* initial_states, int num_bodies, int num_steps,
 
 // Kernel-only path: no allocation, no copies, no synchronisation.  The
 // benchmark suite uses this to separate GPU compute time from memory traffic.
-int mbs_propagate_device(MbsState* device_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* device_trajectory) {
+int mbs_propagate_device(MbsState* __restrict__ device_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* __restrict__ device_trajectory) {
     if (device_states == nullptr || !valid_config(config) ||
         num_bodies <= 0 || num_steps < 0) {
         return static_cast<int>(cudaErrorInvalidValue);
@@ -274,7 +286,9 @@ __device__ void atomic_max_double(double* address, double value) {
 // each thread accumulates the contribution of its assigned particle.  The
 // tile keeps the global loads coalesced and gives the reduction a bounded
 // working set; atomics combine the per-block partial results.
-__global__ void ensemble_stats_kernel(const MbsState* states, int num_bodies, MbsEnsembleStats* stats) {
+__global__ void __launch_bounds__(MBS_THREADS_PER_BLOCK)
+ensemble_stats_kernel(const MbsState* __restrict__ states, int num_bodies,
+                      MbsEnsembleStats* __restrict__ stats) {
     __shared__ MbsState tile[MBS_ENSEMBLE_TILE_SIZE];
 
     const int tid = threadIdx.x;
@@ -341,7 +355,7 @@ __global__ void ensemble_stats_kernel(const MbsState* states, int num_bodies, Mb
 
 }  // namespace
 
-int mbs_ensemble_stats(const MbsState* states, int num_bodies, MbsEnsembleStats* stats) {
+int mbs_ensemble_stats(const MbsState* __restrict__ states, int num_bodies, MbsEnsembleStats* __restrict__ stats) {
     if (states == nullptr || stats == nullptr || num_bodies <= 0) {
         return static_cast<int>(cudaErrorInvalidValue);
     }
@@ -363,7 +377,7 @@ int mbs_ensemble_stats(const MbsState* states, int num_bodies, MbsEnsembleStats*
     return static_cast<int>(cudaSuccess);
 }
 
-int mbs_ensemble_stats_device(const MbsState* device_states, int num_bodies, MbsEnsembleStats* device_stats) {
+int mbs_ensemble_stats_device(const MbsState* __restrict__ device_states, int num_bodies, MbsEnsembleStats* __restrict__ device_stats) {
     if (device_states == nullptr || device_stats == nullptr || num_bodies <= 0) {
         return static_cast<int>(cudaErrorInvalidValue);
     }
