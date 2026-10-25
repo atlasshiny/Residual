@@ -142,7 +142,21 @@ The correction models currently train on one 30-day Moon arc and report a random
 | `make test` | Full test suite (CUDA + Rust + Python) |
 | `make test-cpu` | CPU-only validation (`SKIP_CUDA_TESTS=1`) |
 | `make test-cuda` | Full CUDA validation |
-| `make bench` | Build and run the CUDA benchmark suite |
+| `make bench` | Build and run the full CUDA benchmark suite |
+| `make bench-quick` | Short benchmark smoke run (0.2 s per case) |
+| `make bench-json` | Write JSON results to `results/bench.json` (`BENCH_OUT=...`) |
+| `make bench-list` | List registered benchmark cases without running them |
+| `make bench-kernel` | Kernel-only throughput series |
+| `make bench-api` | Full `mbs_propagate` API series |
+| `make bench-transfer` | Host→device and device→host copy bandwidth |
+| `make bench-physics` | J2, ephemeris, force-model, softening, and epoch series |
+| `make bench-trajectory` | Sustained trajectory-write series |
+| `make bench-burns` | Burn-count overhead series |
+| `make bench-timestep` | Step-size scaling series |
+
+Benchmarks use CUDA events and require the CUDA toolkit plus a GPU. Focused
+targets accept `BENCH_ARGS`, and `make bench` also accepts `BENCH_FILTER`; see
+[`benchmarks/README.md`](benchmarks/README.md) for the full case inventory.
 
 ### Tests
 

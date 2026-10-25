@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench clean ui-data ensemble-data
+.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench bench-build bench-quick bench-json bench-list bench-kernel bench-api bench-transfer bench-physics bench-trajectory bench-burns bench-timestep clean ui-data ensemble-data
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -11,7 +11,13 @@ SPICE_MODE ?= moon
 SPICE_ARGS ?=
 DATA ?= data/residual_table.csv
 ARGS ?= $(if $(wildcard $(DATA)),--data $(DATA),)
-BENCH_ARGS ?= --benchmark_min_time=1s
+BENCH_MIN_TIME ?= 1s
+BENCH_ARGS ?= --benchmark_min_time=$(BENCH_MIN_TIME)
+BENCH_FILTER ?=
+BENCH_OUT ?= results/bench.json
+BENCH_BIN ?= $(BUILD_DIR)/benchmarks/multibody_bench
+BENCH_FILTER_ARG = $(if $(strip $(BENCH_FILTER)),--benchmark_filter='$(BENCH_FILTER)',)
+BENCH_RUN_ARGS = $(BENCH_FILTER_ARG) $(BENCH_ARGS)
 
 all: cuda rust python
 
@@ -117,12 +123,54 @@ test-cpu:
 	cargo test --workspace
 
 # Build and run the CUDA propagator benchmark suite.  Requires the CUDA
-# toolkit; pass extra Google Benchmark flags with BENCH_ARGS.
-bench:
+# toolkit; pass extra Google Benchmark flags with BENCH_ARGS, or select series
+# with BENCH_FILTER.  Examples:
+#   make bench
+#   make bench BENCH_ARGS="--benchmark_min_time=0.5s --benchmark_repetitions=3"
+#   make bench BENCH_FILTER="BM_PropagateKernelBurns"
+#   make bench-json BENCH_OUT=results/quick.json
+bench-build:
 	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 	cmake --build $(BUILD_DIR) -j --target multibody_bench
-	mkdir -p results
-	$(BUILD_DIR)/benchmarks/multibody_bench $(BENCH_ARGS)
+
+bench: bench-build
+	mkdir -p results $(dir $(BENCH_OUT))
+	$(BENCH_BIN) $(BENCH_RUN_ARGS)
+
+# Short sampling window for a fast smoke run.
+bench-quick: BENCH_ARGS = --benchmark_min_time=0.2s
+bench-quick: bench
+
+# Machine-readable output for the viewer, CI, or a report.
+bench-json: BENCH_ARGS = --benchmark_min_time=$(BENCH_MIN_TIME) --benchmark_format=json --benchmark_out=$(BENCH_OUT)
+bench-json: bench
+
+# List every registered case without executing it.
+bench-list: bench-build
+	$(BENCH_BIN) --benchmark_list_tests $(BENCH_FILTER_ARG)
+
+# Focused subsets.  Filters are POSIX regular expressions matched against the
+# full benchmark name, including its /arg/arg suffix.
+bench-kernel: BENCH_FILTER = ^BM_PropagateKernel/
+bench-kernel: bench
+
+bench-api: BENCH_FILTER = ^BM_PropagateApi/
+bench-api: bench
+
+bench-transfer: BENCH_FILTER = ^BM_(HostToDevice|DeviceToHost)
+bench-transfer: bench
+
+bench-physics: BENCH_FILTER = ^BM_PropagateKernel(J2|Ephemeris|Forces|Full|Softening|Epoch)
+bench-physics: bench
+
+bench-trajectory: BENCH_FILTER = ^BM_PropagateTrajectory
+bench-trajectory: bench
+
+bench-burns: BENCH_FILTER = ^BM_PropagateKernelBurns
+bench-burns: bench
+
+bench-timestep: BENCH_FILTER = ^BM_PropagateKernelTimestep
+bench-timestep: bench
 
 # Full validation including the CUDA kernel and comparison tests.
 test-cuda:

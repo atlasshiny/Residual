@@ -43,3 +43,5 @@ jobs:
           cmake -B build -DBUILD_TESTING=ON -DCMAKE_CUDA_ARCHITECTURES=75 -DSKIP_CUDA_TESTS=OFF
       - name: Build
         run: cmake --build build
+      - name: List benchmarks
+        run: ./build/benchmarks/multibody_bench --benchmark_list_tests
