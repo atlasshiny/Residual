@@ -19,7 +19,7 @@ namespace {
 // written after each integration step.
 __global__ void __launch_bounds__(MBS_THREADS_PER_BLOCK)
 multibody_kernel(MbsState* __restrict__ states, int num_bodies, int num_steps,
-                 MbsConfig config, MbsState* __restrict__ trajectory) {
+                 const MbsConfig* __restrict__ config, MbsState* __restrict__ trajectory) {
     const int stride = blockDim.x * gridDim.x;
     const MbsConfig& cfg = *config;
 
