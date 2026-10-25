@@ -689,6 +689,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "dynamics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "embed-resource"
 version = "3.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1783,6 +1790,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mission"
+version = "0.1.0"
+dependencies = [
+ "dynamics",
+ "schema",
+ "serde",
+]
+
+[[package]]
 name = "muda"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2470,6 +2486,7 @@ dependencies = [
 name = "residual-ui"
 version = "0.1.0"
 dependencies = [
+ "mission",
  "serde",
  "serde_json",
  "tauri",
@@ -2529,6 +2546,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "schema"
+version = "0.1.0"
+dependencies = [
+ "dynamics",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
