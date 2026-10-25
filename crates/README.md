@@ -3,7 +3,7 @@
 | Crate | Role |
 |---|---|
 | `dynamics` | Pure-Rust RK4 propagator mirroring the CUDA physics (fallback + tests). |
-| `frames` | Time and inertial-frame newtypes. |
+| `frames` | TDB epochs (JD/MJD/Gregorian), duration arithmetic, inertial-frame newtypes. |
 | `ingest` | Reference telemetry CSV → validated `State`s with linear resampling. |
 | `residual` | `reference - propagated` rows, burn masking, regular-grid resampling. |
 | `posebuilder` | State + pointing law → camera pose and relative `ΔT` actions. |
