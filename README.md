@@ -114,7 +114,8 @@ SPICE ingestion is Python-only (`scripts/fetch_spice.py` with `spiceypy`); it pr
 | `make cuda` | Build CUDA C++ project |
 | `make fetch-data` | Fetch and convert Horizons data |
 | `make fetch-spice` | Fetch and convert SPICE data (`SPICE_START`, `SPICE_STOP`, `SPICE_STEP`, `SPICE_MODE`) |
-| `make residual` | Generate `data/residual_table.csv` |
+| `make residual` | Generate `data/residual_table.csv` with the circular analytic ephemeris |
+| `make residual-tabulated` | Generate `data/residual_table_tabulated.csv` from the measured Earth-Moon geometry (`--preserve-distance` reference) and print the analytic/tabulated RMS comparison |
 | `make train` | Train models on `data/residual_table.csv` (or `DATA=...`); writes `ml/pinn/pinn_result.json` |
 | `make ui-data` | Rebuild the Tauri viewer bundle in `tauri-src/src/data/` |
 | `make ensemble-data` | Regenerate the demo Monte-Carlo cloud (`ensemble.json`) |

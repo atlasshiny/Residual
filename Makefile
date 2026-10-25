@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data fetch-spice residual train test-cpu test-cuda tauri bench clean ui-data ensemble-data
+.PHONY: all cuda rust python test fetch-data fetch-spice residual residual-tabulated train test-cpu test-cuda tauri bench clean ui-data ensemble-data
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -53,11 +53,30 @@ fetch-spice:
 	  --raw data/raw_spice.csv --mode $(SPICE_MODE) $(CONVERT_ARGS)
 
 # Reference trajectory -> residual table (dr, dv per sample).
+# Uses the circular Earth-Moon ephemeris, matching the CUDA kernel.
 data/reference.csv:
 	$(MAKE) fetch-data
 
 residual: data/reference.csv
 	cargo run -p residual --example residual_pipeline -- data/reference.csv data/residual_table.csv
+
+# Same pipeline but driven by the measured Earth-Moon geometry.  The reference
+# must keep the real separation: the default reference is rescaled onto the
+# circular model's radius, which throws away the geometry the table needs.
+PRESERVED_REFERENCE ?= data/reference_preserve.csv
+
+$(PRESERVED_REFERENCE): data/raw_moon.csv
+	uv run --extra data python scripts/convert_reference.py \
+	  --raw data/raw_moon.csv --out $(PRESERVED_REFERENCE) \
+	  --manifest data/reference_preserve.manifest.json --preserve-distance
+
+data/raw_moon.csv:
+	$(MAKE) fetch-data
+
+residual-tabulated: $(PRESERVED_REFERENCE)
+	cargo run -p residual --example residual_pipeline -- \
+	  $(PRESERVED_REFERENCE) data/residual_table_tabulated.csv \
+	  --ephemeris tabulated --compare
 
 # Train PINN/MLP/SINDy.  Uses data/residual_table.csv when present, otherwise
 # falls back to the synthetic demo.  Override with e.g.

@@ -4,37 +4,150 @@
 //!
 //! ```text
 //! cargo run -p residual --example residual_pipeline -- reference.csv out.csv [mission.json]
+//!     [--ephemeris analytic|tabulated] [--compare]
 //! ```
 //!
 //! The reference CSV uses the canonical `t,x,y,z,vx,vy,vz` header.  The
 //! propagator starts from the first reference state and uses either the
 //! mission's solver settings or the reference cadence.  Burn windows declared
 //! in the mission are masked out of the output table.
+//!
+//! # Ephemeris
+//!
+//! `--ephemeris analytic` (the default) keeps the circular Earth-Moon model
+//! that matches the CUDA kernel.  Its residual therefore contains both
+//! integrator error and circular-model error.
+//!
+//! `--ephemeris tabulated` builds a [`TabulatedEphemeris`] from the reference
+//! Moon track: the Earth position is recovered from the two-body barycentre
+//! condition, so the propagator sees the measured Earth-Moon geometry.  The
+//! remaining residual is integrator error plus genuinely missing physics
+//! (the Sun, non-gravitational forces), which is what should be handed to the
+//! PINN.
+//!
+//! `--compare` propagates both and prints their RMS position/velocity
+//! residuals before writing the selected one.
+//!
+//! The tabulated model is only meaningful with a reference that keeps the real
+//! Earth-Moon separation (`scripts/convert_reference.py --preserve-distance`).
+//! The default reference is rescaled onto the circular model's radius, so its
+//! geometry is *designed* for `analytic`; feeding it to `tabulated` makes the
+//! residual worse, and the example warns when it detects a constant-radius arc.
 
 use std::env;
 use std::error::Error;
 use std::fs;
 
-use dynamics::{propagate, Config, State};
+use dynamics::{propagate, propagate_with, Config, State, TabulatedEphemeris};
 use ingest::Telemetry;
-use residual::residual_series;
+use residual::{residual_series, ResidualRow};
 use schema::Mission;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("usage: residual_pipeline <reference.csv> <out.csv> [mission.json]");
-        std::process::exit(2);
+/// Which force-field geometry drives the propagation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EphemerisModel {
+    Analytic,
+    Tabulated,
+}
+
+impl EphemerisModel {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "analytic" | "circular" => Ok(Self::Analytic),
+            "tabulated" | "table" | "reference" => Ok(Self::Tabulated),
+            other => Err(format!(
+                "unknown ephemeris '{other}' (expected 'analytic' or 'tabulated')"
+            )),
+        }
     }
 
-    let reference_path = &args[1];
-    let output_path = &args[2];
+    fn label(self) -> &'static str {
+        match self {
+            Self::Analytic => "analytic (circular)",
+            Self::Tabulated => "tabulated (reference geometry)",
+        }
+    }
+}
+
+fn print_usage() {
+    eprintln!(
+        "usage: residual_pipeline <reference.csv> <out.csv> [mission.json]\n\
+                [--ephemeris analytic|tabulated] [--compare]"
+    );
+}
+
+/// RMS position error (metres) and velocity error (m/s).
+fn rms(rows: &[ResidualRow]) -> (f64, f64) {
+    if rows.is_empty() {
+        return (0.0, 0.0);
+    }
+    let n = rows.len() as f64;
+    let position = (rows.iter().map(|r| r.dr.norm().powi(2)).sum::<f64>() / n).sqrt();
+    let velocity = (rows.iter().map(|r| r.dv.norm().powi(2)).sum::<f64>() / n).sqrt();
+    (position, velocity)
+}
+
+/// Whether the arc sits on a single radius to within floating-point noise.
+///
+/// `convert_reference.py` rescales every sample onto the propagator's nominal
+/// Earth-Moon distance by default.  Such an arc is circular by construction and
+/// is meant for the analytic model; the tabulated model wants the measured
+/// geometry instead.
+fn has_constant_radius(positions: &[dynamics::Vec3]) -> bool {
+    if positions.len() < 2 {
+        return false;
+    }
+    let radii: Vec<f64> = positions.iter().map(|p| p.norm()).collect();
+    let mean = radii.iter().sum::<f64>() / radii.len() as f64;
+    if !(mean.is_finite() && mean > 0.0) {
+        return false;
+    }
+    let max_dev = radii
+        .iter()
+        .map(|r| (r - mean).abs())
+        .fold(0.0_f64, f64::max);
+    max_dev / mean < 1e-4
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut positional = Vec::new();
+    let mut model = EphemerisModel::Analytic;
+    let mut compare = false;
+
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--ephemeris" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--ephemeris needs a value".to_string())?;
+                model = EphemerisModel::parse(&value)?;
+            }
+            "--compare" => compare = true,
+            "--help" | "-h" => {
+                print_usage();
+                return Ok(());
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag '{other}'").into());
+            }
+            other => positional.push(other.to_string()),
+        }
+    }
+
+    if positional.len() < 2 || positional.len() > 3 {
+        print_usage();
+        std::process::exit(2);
+    }
+    let reference_path = &positional[0];
+    let output_path = &positional[1];
 
     let telemetry = Telemetry::load(reference_path)?;
     let samples = telemetry.samples();
     let start_time = samples.first().expect("non-empty").t;
+    let end_time = samples.last().expect("non-empty").t;
 
-    let (mut config, mission) = match args.get(3) {
+    let (mut config, mission) = match positional.get(2) {
         Some(path) => {
             let mission = Mission::load(path)?;
             (Config::from(mission.solver.clone()), Some(mission))
@@ -42,9 +155,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         None => (Config::default(), None),
     };
     config.epoch = start_time;
-    // For Moon residuals, the particle IS the Moon, so it should not
-    // be attracted by the Moon's own gravity.
-    config.mu_moon = 0.0;
+
+    // The reference is the Moon itself, so it must not be attracted by its own
+    // gravity.  The *table* still needs the physical masses to recover the
+    // Earth track, so build it before disabling the Moon term.
+    let (mu_earth, mu_moon) = (config.mu_earth, config.mu_moon);
 
     // Prefer the mission cadence; otherwise match the reference spacing.
     let dt = match &mission {
@@ -56,14 +171,91 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("propagation step must be positive".into());
     }
 
-    let end_time = samples.last().expect("non-empty").t;
     let steps = ((end_time - start_time) / dt).ceil() as usize;
 
-    let start_state: State = samples[0].state;
-    let trajectory = propagate(start_state, steps, dt, &config);
+    let table = if model == EphemerisModel::Tabulated || compare {
+        let table = TabulatedEphemeris::from_moon_track(
+            samples.iter().map(|s| (s.t, s.state.r)),
+            mu_earth,
+            mu_moon,
+        )?;
+        // A partitioned integration would silently clamp outside the arc, so
+        // reject a reference that the table cannot cover.
+        table.check_span(start_time, end_time)?;
+        Some(table)
+    } else {
+        None
+    };
 
+    if model == EphemerisModel::Tabulated {
+        let positions: Vec<dynamics::Vec3> = samples.iter().map(|s| s.state.r).collect();
+        if has_constant_radius(&positions) {
+            eprintln!(
+                "warning: reference radius is constant to 1e-4, so this looks like the \
+                 circular-model normalized arc. Regenerate it with \
+                 `scripts/convert_reference.py --preserve-distance` before using the \
+                 tabulated ephemeris."
+            );
+        }
+    }
+
+    config.mu_moon = 0.0;
+
+    let start_state: State = samples[0].state;
     let reference: Vec<(f64, State)> = samples.iter().map(|s| (s.t, s.state)).collect();
+
+    let propagate_model = |choice: EphemerisModel| -> Vec<State> {
+        match choice {
+            EphemerisModel::Analytic => propagate(start_state, steps, dt, &config),
+            EphemerisModel::Tabulated => {
+                let table = table.as_ref().expect("tabulated model built a table");
+                propagate_with(start_state, steps, dt, &config, table)
+            }
+        }
+    };
+
+    let trajectory = propagate_model(model);
     let rows = residual_series(&reference, &trajectory, config.epoch, dt);
+
+    match model {
+        EphemerisModel::Analytic => {
+            println!("ephemeris: analytic circular Earth-Moon model");
+        }
+        EphemerisModel::Tabulated => {
+            let table = table.as_ref().expect("tabulated model built a table");
+            let (first, last) = table.time_span();
+            println!(
+                "ephemeris: tabulated reference geometry ({} samples, t = [{first}, {last}] s)",
+                table.len()
+            );
+        }
+    }
+
+    if compare {
+        println!(
+            "ephemeris comparison over {} samples (dt = {dt} s):",
+            reference.len()
+        );
+        let (position, velocity) = rms(&rows);
+        println!(
+            "  {:<32} rms |dr| = {:>14.3} m   rms |dv| = {:>10.4} m/s",
+            model.label(),
+            position,
+            velocity
+        );
+        let other = match model {
+            EphemerisModel::Analytic => EphemerisModel::Tabulated,
+            EphemerisModel::Tabulated => EphemerisModel::Analytic,
+        };
+        let other_rows = residual_series(&reference, &propagate_model(other), config.epoch, dt);
+        let (position, velocity) = rms(&other_rows);
+        println!(
+            "  {:<32} rms |dr| = {:>14.3} m   rms |dv| = {:>10.4} m/s",
+            other.label(),
+            position,
+            velocity
+        );
+    }
 
     let mut csv = String::from("t,drx,dry,drz,dvx,dvy,dvz\n");
     let mut written = 0usize;

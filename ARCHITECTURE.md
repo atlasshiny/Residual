@@ -83,7 +83,15 @@ The performance-critical propagator stays in CUDA/C++. Rust crates may still be 
 | `schema` | Vehicle and mission schemas (serde/JSON/YAML) | Stretch: "universal" spacecraft |
 | `ipc` | Job queue and artifact manifest | Talks to Cosmos workers over files + a small RPC |
 
-Validation targets for `dynamics`: energy and angular-momentum conservation on a two-body case, then agreement with Horizons over a chosen arc. The default `AnalyticEphemeris` is the circular Earth-Moon model shared with the CUDA kernel; feeding a `TabulatedEphemeris` built from the Python-ingested Horizons/SPICE arc is what separates integrator error from missing physics before handing residuals to the PINN.
+Validation targets for `dynamics`: energy and angular-momentum conservation on a two-body case, then agreement with Horizons over a chosen arc. The default `AnalyticEphemeris` is the circular Earth-Moon model shared with the CUDA kernel; `TabulatedEphemeris` interpolates the Python-ingested Horizons/SPICE arc so the propagator sees the measured Earth-Moon geometry instead. Building it from the reference Moon track (`TabulatedEphemeris::from_moon_track`) removes the circular-model error from the residual, leaving integrator error plus genuinely missing physics (the Sun, non-gravitational forces) for the PINN.
+
+```bash
+# opt-in: measured geometry instead of the circular model
+make residual-tabulated      # writes data/residual_table_tabulated.csv
+make train DATA=data/residual_table_tabulated.csv
+```
+
+The tabulated path needs a reference that keeps the real separation (`scripts/convert_reference.py --preserve-distance`); the default `data/reference.csv` is rescaled onto the circular radius and is intended for the analytic model. The example warns when it detects such a constant-radius arc. With the 30-day Horizons arc, the measured-geometry model cuts the RMS position residual by roughly 4.5× (64,800 km → 14,400 km); the remainder is dominated by the unmodelled solar perturbation, while the fixed-step integrator itself contributes about 1.4 km RMS (velocity Verlet at 600 s versus an adaptive DOP853 solve of the same force model).
 
 ### 4.2 PINN branch (`ml/pinn/`)
 

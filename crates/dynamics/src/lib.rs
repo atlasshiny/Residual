@@ -503,6 +503,9 @@ pub enum EphemerisError {
     InconsistentSun { index: usize },
     /// The requested time lies outside the tabulated span.
     OutOfRange { t: f64, start: f64, end: f64 },
+    /// A mass ratio was zero or not finite, so the Earth track cannot be
+    /// derived from the Moon track.
+    NonPositiveMass,
 }
 
 impl fmt::Display for EphemerisError {
@@ -522,6 +525,10 @@ impl fmt::Display for EphemerisError {
             Self::OutOfRange { t, start, end } => {
                 write!(f, "time {t} outside ephemeris span [{start}, {end}]")
             }
+            Self::NonPositiveMass => write!(
+                f,
+                "cannot derive an Earth track without positive, finite Earth and Moon masses"
+            ),
         }
     }
 }
@@ -562,6 +569,41 @@ impl TabulatedEphemeris {
             }
         }
         Ok(Self { samples, has_sun })
+    }
+
+    /// Build a real-geometry table from a barycentric Moon track.
+    ///
+    /// The Earth track is derived from the two-body barycentre condition
+    /// `mu_earth * r_earth + mu_moon * r_moon = 0`, so a reference arc written
+    /// in the Earth-Moon barycentric frame (the canonical `reference.csv` from
+    /// `scripts/convert_reference.py`) is enough to drive the propagator with
+    /// the measured geometry instead of the circular model.
+    ///
+    /// `mu_earth` and `mu_moon` must be the *physical* gravitational
+    /// parameters, not the values used to propagate a body that should not
+    /// attract itself.  The residual pipeline zeroes `mu_moon` for the Moon;
+    /// build the table before doing so.
+    ///
+    /// The table carries no Sun positions.  Leave `Config::mu_sun` at zero (or
+    /// attach a Sun track separately) when using it.
+    pub fn from_moon_track<I>(track: I, mu_earth: f64, mu_moon: f64) -> Result<Self, EphemerisError>
+    where
+        I: IntoIterator<Item = (f64, Vec3)>,
+    {
+        if !(mu_earth.is_finite() && mu_earth > 0.0 && mu_moon.is_finite() && mu_moon > 0.0) {
+            return Err(EphemerisError::NonPositiveMass);
+        }
+        let earth_per_moon = -mu_moon / mu_earth;
+        let samples = track
+            .into_iter()
+            .map(|(t, moon)| EphemerisSample {
+                t,
+                earth: moon.scale(earth_per_moon),
+                moon,
+                sun: None,
+            })
+            .collect();
+        Self::new(samples)
     }
 
     /// Number of tabulated samples.
@@ -1797,6 +1839,78 @@ mod ephemeris_tests {
             TabulatedEphemeris::new(vec![first, sample(1.0)]),
             Err(EphemerisError::InconsistentSun { index: 1 })
         ));
+    }
+
+    #[test]
+    fn moon_track_reconstructs_the_analytic_barycentric_geometry() {
+        let cfg = Config::default();
+        let samples: Vec<EphemerisSample> = (0..=720)
+            .map(|i| {
+                let t = i as f64 * 10.0;
+                let (earth, moon) = earth_moon_positions(t, &cfg);
+                EphemerisSample {
+                    t,
+                    earth,
+                    moon,
+                    sun: None,
+                }
+            })
+            .collect();
+        let table = TabulatedEphemeris::from_moon_track(
+            samples.iter().map(|s| (s.t, s.moon)),
+            cfg.mu_earth,
+            cfg.mu_moon,
+        )
+        .unwrap();
+
+        for expected in samples.iter().step_by(97) {
+            let bodies = table.positions(expected.t, &cfg);
+            assert!((bodies.earth.sub(expected.earth)).norm() < 1e-6);
+            assert!((bodies.moon.unwrap().sub(expected.moon)).norm() < 1e-6);
+            // mu_e * r_e + mu_m * r_m must cancel at the barycentre.
+            let balance = bodies
+                .earth
+                .scale(cfg.mu_earth)
+                .add(bodies.moon.unwrap().scale(cfg.mu_moon));
+            let scale = cfg.moon_distance * cfg.mu_moon;
+            assert!(
+                balance.norm() / scale < 1e-12,
+                "barycentre residual {}",
+                balance.norm()
+            );
+        }
+
+        let state = State {
+            r: Vec3::new(6.6e6, 0.0, 0.0),
+            v: Vec3::new(0.0, 7.5e3, 0.0),
+        };
+        let analytic = propagate(state, 720, 10.0, &cfg);
+        let tabulated = propagate_with(state, 720, 10.0, &cfg, &table);
+        let diff = analytic
+            .last()
+            .unwrap()
+            .r
+            .sub(tabulated.last().unwrap().r)
+            .norm();
+        assert!(diff < 1e-6, "derived Earth track diverged by {diff} m");
+    }
+
+    #[test]
+    fn moon_track_requires_physical_masses() {
+        let track = || vec![(0.0, Vec3::new(1.0, 0.0, 0.0))];
+        assert_eq!(
+            TabulatedEphemeris::from_moon_track(track(), 0.0, 1.0),
+            Err(EphemerisError::NonPositiveMass)
+        );
+        assert_eq!(
+            TabulatedEphemeris::from_moon_track(track(), 1.0, 0.0),
+            Err(EphemerisError::NonPositiveMass)
+        );
+        assert_eq!(
+            TabulatedEphemeris::from_moon_track(track(), f64::NAN, 1.0),
+            Err(EphemerisError::NonPositiveMass)
+        );
+        assert!(TabulatedEphemeris::from_moon_track(track(), 398_600.0, 4_904.0).is_ok());
     }
 
     #[test]

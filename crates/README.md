@@ -2,7 +2,7 @@
 
 | Crate | Role |
 |---|---|
-| `dynamics` | Velocity-Verlet + adaptive Dormand–Prince propagators with a shared acceleration/burn model, CUDA-matching validation, and an ephemeris hook (`AnalyticEphemeris` by default, `TabulatedEphemeris` for real data). |
+| `dynamics` | Velocity-Verlet + adaptive Dormand–Prince propagators with a shared acceleration/burn model, CUDA-matching validation, and an ephemeris hook (`AnalyticEphemeris` by default; `TabulatedEphemeris::from_moon_track` rebuilds the Earth track from a barycentric Moon arc). |
 | `frames` | TDB epochs (JD/MJD/Gregorian), duration arithmetic, inertial-frame newtypes. |
 | `ingest` | Reference telemetry CSV → validated `State`s with linear resampling. |
 | `residual` | `reference - propagated` rows, burn masking, regular-grid resampling. |
