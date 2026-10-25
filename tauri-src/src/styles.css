@@ -439,6 +439,14 @@ html, body {
 }
 .strip-card.accent .value { color: var(--accent); }
 .strip-card.amber .value { color: var(--amber); }
+.strip-card.good .value { color: #34d399; }
+.strip-card.mid .value { color: #fbbf24; }
+.strip-card.low .value { color: #f87171; }
+.strip-card.bad .value { color: #ef4444; }
+.metric-card.good .value { color: #34d399; }
+.metric-card.mid .value { color: #fbbf24; }
+.metric-card.low .value { color: #f87171; }
+.metric-card.bad .value { color: #ef4444; }
 
 /* ---------- Animations ---------- */
 @keyframes spin { to { transform: rotate(360deg); } }

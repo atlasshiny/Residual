@@ -113,7 +113,14 @@
           </details>
         </section>
 
-        <section class="card" id="residual-card" data-mode-panel="orbit">
+        <section class="card" id="guide-card" data-mode-panel="orbit">
+          <div class="card-head">
+            <h2>Guide map</h2>
+            <span class="status-dot" id="guide-dot"></span>
+          </div>
+          <p class="status-text">Top-down view (Earth–Moon plane)</p>
+          <canvas id="guide-canvas" width="320" height="240" aria-label="Guide map"></canvas>
+        </section>
           <div class="card-head">
             <h2>Residual analysis</h2>
             <span class="status-dot" id="residual-dot"></span>

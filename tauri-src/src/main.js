@@ -22,7 +22,7 @@ const stripMetrics = document.getElementById("strip-metrics");
 const autoRotateCb = document.getElementById("auto-rotate");
 const showGridCb = document.getElementById("show-grid");
 const showAxesCb = document.getElementById("show-axes");
-const residualCanvas = document.getElementById("residual-canvas");
+const guideCanvas = document.getElementById("guide-canvas");
 const residualStatus = document.getElementById("residual-status");
 const residualDot = document.getElementById("residual-dot");
 const residualHover = document.getElementById("residual-hover");
@@ -226,6 +226,14 @@ function buildStripCard(label, value, cls = "") {
   div.innerHTML = `<div class="label">${label}</div><div class="value">${value}</div>`;
   return div;
 }
+function r2Class(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  if (n >= 0.9) return "good";
+  if (n >= 0.5) return "mid";
+  if (n >= 0) return "low";
+  return "bad";
+}
 
 function buildFallbackNote(msg) {
   const div = document.createElement("div");
@@ -390,6 +398,7 @@ async function loadTrajectory() {
 
     trajectoryLoaded = true;
     sceneStatus.textContent = (trajectoryLoaded && pinnLoaded) ? "Scene ready" : sceneStatus.textContent;
+    drawGuide(0);
     settle();
   } catch (error) {
     const message = fileError("Trajectory data unavailable", src, error);
@@ -450,10 +459,10 @@ async function loadPinnResult() {
 
     // strip metrics
     [
-      buildStripCard("PINN R²", fmt(pinn.train_r2, 4), "accent"),
-      buildStripCard("SINDy R²", fmt(sindy.train_r2, 4), "accent"),
-      buildStripCard("MLP R²", fmt(mlp.train_r2, 4), ""),
-      buildStripCard("LinearReg R²", fmt(linreg.train_r2, 4), ""),
+      buildStripCard("PINN R²", fmt(pinn.train_r2, 4), r2Class(pinn.train_r2)),
+      buildStripCard("SINDy R²", fmt(sindy.train_r2, 4), r2Class(sindy.train_r2)),
+      buildStripCard("MLP R²", fmt(mlp.train_r2, 4), r2Class(mlp.train_r2)),
+      buildStripCard("LinearReg R²", fmt(linreg.train_r2, 4), r2Class(linreg.train_r2)),
       buildStripCard("Samples", data.n_samples ?? "—", ""),
     ].forEach((c) => {
       c.dataset.strip = "pinn";
@@ -471,6 +480,7 @@ async function loadPinnResult() {
       for (const [name, m] of models) {
         if (!m) continue;
         const card = buildMetricCard(`${name} test R²`, fmt(m.test_r2 ?? m.train_r2, 4), { accent: name === "PINN" });
+        card.classList.add(r2Class(m.test_r2 ?? m.train_r2));
         residualMetrics.appendChild(card);
       }
       const sc = buildMetricCard("Samples", data.n_samples ?? "—", {});
@@ -640,6 +650,67 @@ function drawResidual() {
     lx += 70;
   }
   residualChart = { rows, xOf, yOf, tMin, tMax };
+}
+
+function drawGuide(idx) {
+  if (!guideCanvas) return;
+  const ctx = guideCanvas.getContext("2d");
+  const W = guideCanvas.width, H = guideCanvas.height;
+  ctx.fillStyle = "#050816"; ctx.fillRect(0, 0, W, H);
+  if (!trajectoryData?.points?.length) return;
+  const pts = trajectoryData.points;
+  const i = Math.max(0, Math.min(pts.length - 1, idx ?? 0));
+  // analytic moon position at this sample's time
+  const t = Array.isArray(trajectoryData.times) ? Number(trajectoryData.times[i]) : i;
+  const MU_E = 3.986004418e14, MU_M = 4.9048695e12, D = 3.844e8;
+  const total = MU_E + MU_M;
+  const theta = Math.sqrt(total / (D*D*D)) * t;
+  const mf = MU_M / total;
+  const c = Math.cos(theta), s = Math.sin(theta);
+  const moon = [D*(1-mf)*c, D*(1-mf)*s];
+  const earth = [-D*mf*c, -D*mf*s];
+  // collect all points for scale
+  const all = pts.map((p) => [p[0], p[2]]); // x,z plane (top-down)
+  all.push(moon, earth);
+  if (Array.isArray(trajectoryData.points_corrected)) for (const p of trajectoryData.points_corrected) all.push([p[0], p[2]]);
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of all) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
+  const cx = (minX+maxX)/2, cy = (minY+maxY)/2;
+  const scale = 0.85 * Math.min(W/(maxX-minX || 1), H/(maxY-minY || 1));
+  const px = (p) => [W/2 + (p[0]-cx)*scale, H/2 - (p[1]-cy)*scale];
+  // stars
+  ctx.fillStyle = "rgba(200,200,200,0.6)";
+  for (let k = 0; k < 80; k++) {
+    const sx = (k*37) % W, sy = (k*73) % H;
+    ctx.fillRect(sx, sy, 1, 1);
+  }
+  // moon trail (none stored) skip; reference trail
+  ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 1.5; ctx.beginPath();
+  for (let k = 0; k <= i; k++) {
+    const p = px([pts[k][0], pts[k][2]]);
+    if (k === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+  }
+  ctx.stroke();
+  // corrected trail
+  const corr = trajectoryData.points_corrected;
+  if (Array.isArray(corr) && corr.length) {
+    ctx.strokeStyle = "rgba(244,114,182,0.9)"; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let k = 0; k <= Math.min(i, corr.length-1); k++) {
+      const p = px([corr[k][0], corr[k][2]]);
+      if (k === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+    }
+    ctx.stroke();
+  }
+  // earth
+  const ep = px(earth); ctx.fillStyle = "#2563eb"; ctx.beginPath(); ctx.arc(ep[0], ep[1], 6, 0, Math.PI*2); ctx.fill();
+  // moon
+  const mp = px(moon); ctx.fillStyle = "#9ca3af"; ctx.beginPath(); ctx.arc(mp[0], mp[1], 4, 0, Math.PI*2); ctx.fill();
+  // spacecraft
+  const sp = px([pts[i][0], pts[i][2]]); ctx.fillStyle = "#f59e0b"; ctx.beginPath(); ctx.arc(sp[0], sp[1], 5, 0, Math.PI*2); ctx.fill();
+  // labels
+  ctx.fillStyle = "#94a3b8"; ctx.font = "10px sans-serif";
+  ctx.fillText("Earth", ep[0]+8, ep[1]);
+  ctx.fillText("Moon", mp[0]+6, mp[1]);
 }
 
 function maybeFinishLoading() {
@@ -1287,6 +1358,7 @@ function stepOrbit(delta) {
     const t = Array.isArray(trajectoryData.times) ? trajectoryData.times[idx] : idx;
     orbitTimeEl.textContent = `t = ${Number(t).toFixed(2)} s`;
   }
+  drawGuide(idx);
 }
 function updateOrbitPlayback(dt) {
   if (!orbitPlaying || !trajectoryData?.points?.length) return;
