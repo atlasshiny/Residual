@@ -38,27 +38,6 @@ def _parse_cols(value):
     return [c.strip() for c in value.split(",") if c.strip()]
 
 
-def _fit_width(values, width):
-    """Zero-pad (or truncate) the last axis of ``values`` to ``width`` columns.
-
-    The PINN predicts a residual trajectory whose time-derivative is the
-    velocity residual, so the supervised position targets must share the
-    dimensionality of the velocity targets. When fewer position targets are
-    selected than velocity components, the missing axes are zero-padded (a
-    standardized zero means "leave this residual component unconstrained").
-    """
-    values = np.asarray(values, dtype=float)
-    if values.ndim == 1:
-        values = values.reshape(-1, 1)
-    n_cols = values.shape[1]
-    if n_cols == width:
-        return values
-    if n_cols > width:
-        return values[:, :width]
-    pad = np.zeros((values.shape[0], width - n_cols), dtype=float)
-    return np.concatenate([values, pad], axis=1)
-
-
 def load_mission(path):
     with open(path, "r", encoding="utf-8") as fh:
         raw = json.load(fh)
