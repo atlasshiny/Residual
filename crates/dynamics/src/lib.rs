@@ -61,6 +61,7 @@ impl Vec3 {
         Self { x, y, z }
     }
 
+#[allow(clippy::should_implement_trait)]
     pub fn add(self, other: Self) -> Self {
         Self {
             x: self.x + other.x,
@@ -69,6 +70,7 @@ impl Vec3 {
         }
     }
 
+#[allow(clippy::should_implement_trait)]
     pub fn sub(self, other: Self) -> Self {
         Self {
             x: self.x - other.x,
@@ -759,10 +761,11 @@ mod tests {
     use super::*;
 
     fn two_body_config() -> Config {
-        let mut c = Config::default();
-        c.moon_distance = 0.0;
-        c.mu_moon = 0.0;
-        c
+        Config {
+            moon_distance: 0.0,
+            mu_moon: 0.0,
+            ..Config::default()
+        }
     }
 
     #[test]

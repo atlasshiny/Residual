@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from ml.pinn.dataset import split_by_time
-from ml.pinn.run import apply_burn_mask, build_parser, burn_keep_mask, run
+from ml.pinn.dataset import apply_burn_mask, burn_keep_mask, split_by_time
+from ml.pinn.run import build_parser, run
 
 
 def _parse(out, *extra, epochs=2):

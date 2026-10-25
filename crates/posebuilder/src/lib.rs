@@ -668,9 +668,7 @@ pub fn sixd_to_rotation(d: &[f64; 6]) -> [[f64; 3]; 3] {
 // variants accepting slices
 pub fn rot6d_to_mat_slice(d: &[f64]) -> [[f64; 3]; 3] {
     let mut a = [0.0; 6];
-    for i in 0..6.min(d.len()) {
-        a[i] = d[i];
-    }
+    a[..6.min(d.len())].copy_from_slice(&d[..6.min(d.len())]);
     rot6d_to_mat(&a)
 }
 pub fn rotation_6d_to_matrix_slice(d: &[f64]) -> [[f64; 3]; 3] {
@@ -765,9 +763,7 @@ pub fn delta_to_9d(delta: &Pose, k: f64) -> [f64; 9] {
 /// multiplied by `k`), the inverse of [`to_action`].
 pub fn from_action(action: &[f64], k: f64) -> Pose {
     let mut a = [0.0; 9];
-    for i in 0..9.min(action.len()) {
-        a[i] = action[i];
-    }
+    a[..9.min(action.len())].copy_from_slice(&action[..9.min(action.len())]);
     let translation = Vec3::new(a[0], a[1], a[2]);
     let translation = if k != 0.0 {
         translation.scale(k)
@@ -795,6 +791,7 @@ pub fn from_9d(action: &[f64], k: f64) -> Pose {
 // SVD helper (3x3)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::needless_range_loop)]
 fn svd3(m: [[f64; 3]; 3]) -> ([[f64; 3]; 3], [f64; 3], [[f64; 3]; 3]) {
     // Compute V (eigenvectors of M^T M), singular values, U.
     // M = U S V^T.
@@ -855,6 +852,7 @@ fn det3(m: [[f64; 3]; 3]) -> f64 {
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
 }
 
+#[allow(clippy::needless_range_loop)]
 fn jacobi_eigen(a: &mut [[f64; 3]; 3]) -> ([[f64; 3]; 3], [f64; 3]) {
     // Returns (eigenvectors as columns, eigenvalues).
     let mut v = identity_matrix();

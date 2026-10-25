@@ -249,8 +249,8 @@ where
     let r = if det3(r) < 0.0 {
         // flip last column of V
         let mut v2 = v;
-        for i in 0..3 {
-            v2[i][2] = -v2[i][2];
+        for row in v2.iter_mut() {
+            row[2] = -row[2];
         }
         mat_mul(v2, ut)
     } else {
@@ -281,9 +281,9 @@ where
 
 fn scale_matrix(m: [[f64; 3]; 3], s: f64) -> [[f64; 3]; 3] {
     let mut out = m;
-    for i in 0..3 {
-        for j in 0..3 {
-            out[i][j] *= s;
+    for row in out.iter_mut() {
+        for val in row.iter_mut() {
+            *val *= s;
         }
     }
     out
@@ -364,6 +364,7 @@ where
 // SVD 3x3 (same as posebuilder)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::needless_range_loop)]
 fn svd3(m: [[f64; 3]; 3]) -> ([[f64; 3]; 3], [f64; 3], [[f64; 3]; 3]) {
     let mut mtm = [[0.0; 3]; 3];
     for i in 0..3 {
@@ -403,9 +404,11 @@ fn svd3(m: [[f64; 3]; 3]) -> ([[f64; 3]; 3], [f64; 3], [[f64; 3]; 3]) {
     let (u, v, s) = if detu * detv < 0.0 {
         let mut u2 = u;
         let mut v2 = v;
-        for i in 0..3 {
-            u2[i][2] = -u2[i][2];
-            v2[i][2] = -v2[i][2];
+        for row in u2.iter_mut() {
+            row[2] = -row[2];
+        }
+        for row in v2.iter_mut() {
+            row[2] = -row[2];
         }
         (u2, v2, s)
     } else {
@@ -415,6 +418,7 @@ fn svd3(m: [[f64; 3]; 3]) -> ([[f64; 3]; 3], [f64; 3], [[f64; 3]; 3]) {
     (u, [s[0].abs(), s[1].abs(), s[2].abs()], v)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn jacobi_eigen(a: &mut [[f64; 3]; 3]) -> ([[f64; 3]; 3], [f64; 3]) {
     let mut v = identity_matrix();
     let mut a = *a;
@@ -450,21 +454,19 @@ fn jacobi_eigen(a: &mut [[f64; 3]; 3]) -> ([[f64; 3]; 3], [f64; 3]) {
         a[q][q] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
         a[p][q] = 0.0;
         a[q][p] = 0.0;
-        for i in 0..3 {
-            if i != p && i != q {
-                let aip = a[i][p];
-                let aiq = a[i][q];
-                a[i][p] = c * aip - s * aiq;
-                a[p][i] = a[i][p];
-                a[i][q] = s * aip + c * aiq;
-                a[q][i] = a[i][q];
-            }
+        for i in (0..3).filter(|&i| i != p && i != q) {
+            let aip = a[i][p];
+            let aiq = a[i][q];
+            a[i][p] = c * aip - s * aiq;
+            a[p][i] = a[i][p];
+            a[i][q] = s * aip + c * aiq;
+            a[q][i] = a[i][q];
         }
-        for i in 0..3 {
-            let vip = v[i][p];
-            let viq = v[i][q];
-            v[i][p] = c * vip - s * viq;
-            v[i][q] = s * vip + c * viq;
+        for row in v.iter_mut() {
+            let vip = row[p];
+            let viq = row[q];
+            row[p] = c * vip - s * viq;
+            row[q] = s * vip + c * viq;
         }
     }
 
