@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "dataset": "earth-moon-barycentric-moon-reference",
+  "generated_by": "scripts/convert_reference.py",
+  "generated_utc": "2026-10-25T03:14:57+00:00",
+  "source": {
+    "provider": "JPL Horizons (NASA/JPL Solar System Dynamics)",
+    "target": "301 (Moon)",
+    "center": "500@399 (Earth body centre)",
+    "api_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND=%27301%27&CENTER=%27500%40399%27&MAKE_EPHEM=%27YES%27&EPHEM_TYPE=%27VECTORS%27&START_TIME=%272025-01-01%27&STOP_TIME=%272025-01-31%27&STEP_SIZE=%2710m%27&VEC_TABLE=%272%27&REF_PLANE=%27ECLIPTIC%27&REF_SYSTEM=%27ICRF%27&OUT_UNITS=%27KM-S%27&CSV_FORMAT=%27YES%27&CAL_FORMAT=%27JD%27&TIME_DIGITS=%27SECONDS%27&VEC_CORR=%27NONE%27&OBJ_DATA=%27NO%27",
+    "query": {
+      "format": "text",
+      "COMMAND": "301",
+      "CENTER": "500@399",
+      "MAKE_EPHEM": "YES",
+      "EPHEM_TYPE": "VECTORS",
+      "START_TIME": "2025-01-01",
+      "STOP_TIME": "2025-01-31",
+      "STEP_SIZE": "10m",
+      "VEC_TABLE": "2",
+      "REF_PLANE": "ECLIPTIC",
+      "REF_SYSTEM": "ICRF",
+      "OUT_UNITS": "KM-S",
+      "CSV_FORMAT": "YES",
+      "CAL_FORMAT": "JD",
+      "TIME_DIGITS": "SECONDS",
+      "VEC_CORR": "NONE",
+      "OBJ_DATA": "NO"
+    },
+    "retrieved_utc": "2026-10-25T03:14:56+00:00"
+  },
+  "frame": {
+    "name": "earth-moon-barycentric",
+    "origin": "Earth-Moon barycentre",
+    "orientation": "rotated so the epoch Moon vector is +x and the Moon's orbital angular momentum is +z",
+    "handedness": "right-handed",
+    "propagator_model": "circular Earth-Moon two-body ephemeris used by the CUDA/Rust solvers",
+    "nominal_earth_moon_distance_m": 384400000.0
+  },
+  "epoch": {
+    "time_scale": "TDB",
+    "t_zero": "first sample in data/reference.csv",
+    "first_jd_tdb": 2460676.5,
+    "last_jd_tdb": 2460706.5,
+    "start_tdb": "2025-01-01"
+  },
+  "cadence": {
+    "step_seconds": 600.0,
+    "step": "10m",
+    "samples": 4321,
+    "uniform": true
+  },
+  "units": {
+    "t": "s",
+    "x": "m",
+    "y": "m",
+    "z": "m",
+    "vx": "m/s",
+    "vy": "m/s",
+    "vz": "m/s"
+  },
+  "constants": {
+    "mu_earth_m3_s2": 398600441800000.0,
+    "mu_moon_m3_s2": 4904869500000.0,
+    "total_mu_m3_s2": 403505311300000.0,
+    "earth_moon_distance_m": 384400000.0
+  },
+  "conversion": {
+    "input": "geocentric Moon vector (Moon relative to Earth body centre)",
+    "output": "Moon state in the Earth-Moon barycentric solver frame",
+    "position_units": "km -> m (x1000)",
+    "velocity_units": "km/s -> m/s (x1000)",
+    "barycentric_split": "earth = -D*mu_moon/total_mu * u; moon = D*mu_earth/total_mu * u, where u is the unit Earth->Moon vector and D is the separation",
+    "distance_scaling": "normalised to nominal D=3.844e+08 m",
+    "orientation": "rotated so the epoch Moon vector is +x and the Moon's orbital angular momentum is +z",
+    "checks": {
+      "min": 369787356.0561476,
+      "max": 404298081.4706137,
+      "mean": 384050528.2310349
+    }
+  },
+  "files": {
+    "raw": "data/raw_moon.csv",
+    "reference": "data/reference.csv",
+    "metadata": "data/raw_moon.meta.json"
+  }
+}

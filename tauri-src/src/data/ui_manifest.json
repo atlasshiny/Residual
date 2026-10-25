@@ -1,0 +1,18 @@
+{
+  "schema": "ui-data/v1",
+  "generated_utc": "2026-10-25T08:38:20.026179+00:00",
+  "sources": {
+    "reference": "data/reference.csv",
+    "pinn_result": "ml/pinn/pinn_result.json",
+    "pinn_predictions": "ml/pinn/pinn_predictions.json",
+    "manifest": "data/manifest.json",
+    "ensemble": "tauri-src/src/data/ensemble.json"
+  },
+  "files": [
+    "trajectory.json",
+    "pinn_result.json",
+    "pinn_predictions.json",
+    "manifest.json",
+    "ensemble.json"
+  ]
+}

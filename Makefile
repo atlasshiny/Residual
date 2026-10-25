@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data fetch-spice residual train test-cpu test-cuda tauri bench clean ui-data
+.PHONY: all cuda rust python test fetch-data fetch-spice residual train test-cpu test-cuda tauri bench clean ui-data ensemble-data
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -30,6 +30,9 @@ python:
 
 ui-data:
 	uv run python scripts/make_ui_data.py
+
+ensemble-data:
+	uv run python scripts/make_ensemble_data.py
 
 # Download a short Earth-centred Moon arc with JPL Horizons and convert it
 # into the solver's metres/seconds barycentric frame.  Writes:

@@ -85,16 +85,30 @@ def main() -> int:
     _copy_verbatim(ROOT / "ml" / "pinn" / "pinn_predictions.json", OUT_DIR / "pinn_predictions.json")
     _copy_verbatim(ROOT / "data" / "manifest.json", OUT_DIR / "manifest.json")
 
+    # ensemble (optional)
+    ens_src = ROOT / "tauri-src" / "src" / "data" / "ensemble.json"
+    if ens_src.is_file():
+        if ens_src.resolve() != (OUT_DIR / "ensemble.json").resolve():
+            _copy_verbatim(ens_src, OUT_DIR / "ensemble.json")
+        else:
+            print(f"wrote {OUT_DIR / 'ensemble.json'} (already in place)")
+
+    files = ["trajectory.json", "pinn_result.json", "pinn_predictions.json", "manifest.json"]
+    sources = {
+        "reference": "data/reference.csv",
+        "pinn_result": "ml/pinn/pinn_result.json",
+        "pinn_predictions": "ml/pinn/pinn_predictions.json",
+        "manifest": "data/manifest.json",
+    }
+    if (OUT_DIR / "ensemble.json").is_file():
+        files.append("ensemble.json")
+        sources["ensemble"] = "tauri-src/src/data/ensemble.json"
+
     ui_manifest = {
         "schema": "ui-data/v1",
         "generated_utc": generated,
-        "sources": {
-            "reference": "data/reference.csv",
-            "pinn_result": "ml/pinn/pinn_result.json",
-            "pinn_predictions": "ml/pinn/pinn_predictions.json",
-            "manifest": "data/manifest.json",
-        },
-        "files": ["trajectory.json", "pinn_result.json", "pinn_predictions.json", "manifest.json"],
+        "sources": sources,
+        "files": files,
     }
     dst = OUT_DIR / "ui_manifest.json"
     dst.write_text(json.dumps(ui_manifest, indent=2) + "\n")

@@ -41,6 +41,25 @@ const exportReportBtn = document.getElementById("export-report-btn");
 const showRefCb = document.getElementById("show-ref");
 const showPropCb = document.getElementById("show-prop");
 const showCorrCb = document.getElementById("show-corr");
+const showEnsembleCb = document.getElementById("show-ensemble");
+const ensembleSlider = document.getElementById("ensemble-slider");
+const ensembleInfo = document.getElementById("ensemble-info");
+let ensembleData = null;
+let ensemblePoints = null;
+const pipelineLog = document.getElementById("pipeline-log");
+const pipelineDot = document.getElementById("pipeline-dot");
+const pipelineStatus = document.getElementById("pipeline-status");
+const pickFolderBtn = document.getElementById("pick-folder-btn");
+
+const tauri = window.__TAURI__ || null;
+async function invokeCmd(name, args) {
+  if (!tauri?.core?.invoke) throw new Error("Tauri backend unavailable (running in browser?)");
+  return tauri.core.invoke(name, args || {});
+}
+async function openFolderDialog() {
+  if (!tauri?.dialog?.open) return null;
+  return tauri.dialog.open({ directory: true, multiple: false });
+}
 
 // data globals
 let predictionsData = null;
@@ -470,6 +489,44 @@ async function loadPinnResult() {
     pinnFailed = true;
     showError(message);
     settle();
+  }
+}
+
+async function loadEnsemble() {
+  try {
+    const res = await fetch("./data/ensemble.json");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    ensembleData = await res.json();
+    if (ensembleSlider && ensembleData.n_epochs) {
+      ensembleSlider.max = String(ensembleData.n_epochs - 1);
+      ensembleSlider.value = "0";
+    }
+    renderEnsembleEpoch(0);
+  } catch (e) {
+    ensembleData = null;
+  }
+}
+
+function renderEnsembleEpoch(idx) {
+  if (ensemblePoints) { trajGroup.remove(ensemblePoints); ensemblePoints.geometry?.dispose(); ensemblePoints.material?.dispose(); ensemblePoints = null; }
+  if (!ensembleData || !showEnsembleCb?.checked) return;
+  const cloud = ensembleData.clouds?.[idx];
+  if (!Array.isArray(cloud)) return;
+  const positions = new Float32Array(cloud.length * 3);
+  for (let i = 0; i < cloud.length; i++) {
+    positions[i*3] = cloud[i][0] / 1000;
+    positions[i*3+1] = cloud[i][1] / 1000;
+    positions[i*3+2] = cloud[i][2] / 1000;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({ color: 0xa78bfa, size: 4, transparent: true, opacity: 0.6, sizeAttenuation: true });
+  ensemblePoints = new THREE.Points(geo, mat);
+  trajGroup.add(ensemblePoints);
+  if (ensembleInfo) {
+    const st = ensembleData.stats?.[Math.max(0, idx - 1)];
+    const t = ensembleData.epochs_s?.[idx] ?? idx;
+    ensembleInfo.textContent = `epoch ${idx} · t=${Number(t).toFixed(0)}s · rms=${st ? (st.rms_m / 1000).toFixed(1) + " km" : "—"}`;
   }
 }
 
@@ -1101,8 +1158,10 @@ showAxesCb.addEventListener("change", () => {
 orbitPlayBtn?.addEventListener("click", orbitPlayToggle);
 orbitSlider?.addEventListener("input", () => stepOrbit(0));
 
+ensembleSlider?.addEventListener("input", () => renderEnsembleEpoch(parseInt(ensembleSlider.value, 10) || 0));
+showEnsembleCb?.addEventListener("change", () => renderEnsembleEpoch(parseInt(ensembleSlider?.value || "0", 10) || 0));
 resetViewBtn.addEventListener("click", () => {
-  if (mode === "cosmos" && cosmos.loaded) {
+if (mode === "cosmos" && cosmos.loaded) {
     // refit the camera on the reconstructed pose ring
     controls.target.set(0, 0, 0);
     const r = EARTH_RADIUS * 10;
@@ -1278,6 +1337,29 @@ function animate() {
   renderer.render(scene, camera);
 }
 
+document.querySelectorAll("#pipeline-card [data-target]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const target = btn.dataset.target;
+    if (pipelineLog) pipelineLog.textContent = `Running make ${target}…`;
+    setDot(pipelineDot, "loading");
+    try {
+      const out = await invokeCmd("run_make", { target, cwd: "." });
+      if (pipelineLog) pipelineLog.textContent = out;
+      if (pipelineStatus) pipelineStatus.textContent = `make ${target} completed`;
+      setDot(pipelineDot, "ok");
+      if (target === "ui-data") { loadTrajectory(); loadPinnResult(); loadPredictions(); loadManifest(); loadUiManifest(); }
+    } catch (e) {
+      if (pipelineLog) pipelineLog.textContent = String(e);
+      if (pipelineStatus) pipelineStatus.textContent = `make ${target} failed`;
+      setDot(pipelineDot, "err");
+    }
+  });
+});
+pickFolderBtn?.addEventListener("click", async () => {
+  const p = await openFolderDialog();
+  if (p && jobBaseInput) jobBaseInput.value = p;
+});
+
 /* ---------------- boot ---------------- */
 loadDemoBtn?.addEventListener("click", () => loadDemoJob());
 
@@ -1333,6 +1415,7 @@ loadPinnResult();
 loadPredictions();
 loadManifest();
 loadUiManifest();
+loadEnsemble();
 
 // residual canvas hover
 if (residualCanvas) {

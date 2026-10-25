@@ -75,11 +75,17 @@
             <label class="toggle"><input type="checkbox" id="show-ref" checked /><span>Reference</span></label>
             <label class="toggle"><input type="checkbox" id="show-prop" /><span>Propagated</span></label>
             <label class="toggle"><input type="checkbox" id="show-corr" /><span>PINN-corrected</span></label>
+            <label class="toggle"><input type="checkbox" id="show-ensemble" /><span>Ensemble</span></label>
           </div>
           <div class="playback-row">
             <button id="orbit-play" class="play-btn" type="button" aria-label="Play orbit">▶</button>
             <input type="range" id="orbit-slider" min="0" max="0" value="0" step="1" />
             <span id="orbit-time" class="time-label">t = —</span>
+          </div>
+          <div class="playback-row">
+            <span class="time-label">Ensemble epoch</span>
+            <input type="range" id="ensemble-slider" min="0" max="0" value="0" step="1" />
+            <span id="ensemble-info" class="time-label">—</span>
           </div>
           <p id="provenance" class="status-text provenance"></p>
         </section>
@@ -121,6 +127,23 @@
           <canvas id="residual-canvas" width="320" height="180" aria-label="Residual plot"></canvas>
           <p id="residual-hover" class="status-text"></p>
           <div id="residual-metrics" class="metrics-grid"></div>
+        </section>
+
+        <section class="card" id="pipeline-card">
+          <div class="card-head">
+            <h2>Pipeline</h2>
+            <span class="status-dot" id="pipeline-dot"></span>
+          </div>
+          <p id="pipeline-status" class="status-text">Run make targets from the UI.</p>
+          <div class="btn-row">
+            <button class="btn ghost" data-target="ui-data" type="button">ui-data</button>
+            <button class="btn ghost" data-target="residual" type="button">residual</button>
+            <button class="btn ghost" data-target="train" type="button">train</button>
+          </div>
+          <div class="btn-row">
+            <button id="pick-folder-btn" class="btn ghost" type="button">Open folder…</button>
+          </div>
+          <pre id="pipeline-log" class="pipeline-log"></pre>
         </section>
 
         <section class="card" id="cosmos-card" data-mode-panel="cosmos">
