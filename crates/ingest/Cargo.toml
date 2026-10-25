@@ -5,13 +5,6 @@ edition = "2021"
 
 [dependencies]
 dynamics = { path = "../dynamics" }
-# Real SPICE backend. Optional so the crate (and its tests) build without the
-# full anise dependency tree; enable with `--features anise`.
-anise = { version = "0.10", default-features = false, optional = true }
-
-[features]
-default = []
-anise = ["dep:anise"]
 
 [lib]
 name = "ingest"
