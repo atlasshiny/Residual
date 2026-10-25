@@ -5,6 +5,30 @@ the orbital residual model and the Cosmos rollout pipeline. Most outputs go
 under `data/`; preserve the raw files and their `.meta.json` sidecars so the
 generated data can be traced back to its source.
 
+## SPICE reference pipeline (offline)
+
+SPICE kernels (e.g. `de440.bsp` + `naif0012.tls`) can replace the Horizons
+download. The output feeds the same `convert_reference.py` (Moon mode) or a
+generic body conversion:
+
+```bash
+export SPICE_KERNELS="/path/to/de440.bsp:/path/to/naif0012.tls"
+uv sync --extra spice
+uv run --extra spice python scripts/fetch_spice.py \
+  --target MOON --center EARTH \
+  --start "2022-11-16" --stop "2022-11-17" --step 600 \
+  --out data/raw_spice.csv
+uv run --extra data python scripts/convert_reference.py \
+  --raw data/raw_spice.csv --mode moon --out data/reference.csv
+```
+
+`make fetch-spice SPICE_START=... SPICE_STOP=...` wraps both stages. Training on
+Horizons vs. SPICE data is identical downstream: both produce the canonical
+`data/reference.csv` (SI, Earth-Moon barycentric frame), so `make residual` and
+`ml.pinn.run` need no changes. SPICE differs only in acquisition: offline,
+kernel-version-dependent, and higher precision; it can also target spacecraft
+(`--target -1024` etc.) with `--mode generic` (no barycentric split).
+
 ## Moon reference pipeline
 
 The standard pipeline downloads a short Moon ephemeris arc, converts it into
