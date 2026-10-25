@@ -18,7 +18,7 @@ The project implements the restricted Earth-Moon multibody problem with a symple
   - **SINDy**: sparse polynomial baseline.
   - **Linear regression**: linear baseline.
 - **Cosmos Integration**: Python workers (`ml/cosmos/`) implement transfer, inverse-dynamics, and forward-dynamics jobs over a file contract. `scripts/pinn_to_cosmos.py` reconstructs a PINN-corrected trajectory, runs the Rust `posebuilder`, and optionally submits 9D actions to vLLM-Omni.
-- **Tauri + Three.js Viewer**: visualizes the trajectory and the PINN/SINDy metrics and expression, plus a Sun-direction marker that tracks the current epoch (its distance is compressed to fit the lunar scene; the UI label says "not to scale").
+- **Tauri + Three.js Viewer**: visualizes the trajectory and the PINN/SINDy metrics and expression, plus a Sun-direction marker that tracks the current epoch (its distance is compressed to fit the lunar scene; the UI label says "not to scale"). The orbit view renders guide-style visuals: a dimmed full reference path with a bright growing traveled trail, exaggerated Earth/Moon markers and labels, a deterministic starfield, and a static "Top view" framing the arc face-on down the orbit normal.
 
 ## 📊 Results & Analysis
 
