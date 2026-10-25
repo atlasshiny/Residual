@@ -2,6 +2,11 @@
 //!
 //! State + pointing law -> camera pose `T_t`, relative transforms
 //! `ΔT_t = T_{t-1}^-1 T_t`, 6D rotation helpers, and scale `k`.
+//!
+//! Besides the first-person Earth/Moon ego laws, [`PointingLaw::Observer`]
+//! provides a third-person camera parked at a fixed external vantage point
+//! (see [`ObserverConfig`]); absolute inertial spacecraft positions are
+//! available through [`spacecraft_position_km`].
 
 // Re-exports for convenience.
 pub use dynamics::{Config, State, Vec3};
@@ -21,11 +26,103 @@ pub enum PointingLaw {
     Earth,
     Moon,
     Data,
+    /// Third-person observer: the camera is parked at a fixed external vantage
+    /// point and looks at the spacecraft. Configure the vantage point with
+    /// [`ObserverConfig`]; without one, [`ObserverConfig::default`] is used.
+    Observer,
 }
 
 pub type Pointing = PointingLaw;
 pub type PointingMode = PointingLaw;
 pub type AttitudeLaw = PointingLaw;
+
+// ---------------------------------------------------------------------------
+// Observer (third-person) camera
+// ---------------------------------------------------------------------------
+
+/// Default observer offset from the barycenter, metres (inertial frame).
+///
+/// `1e9 m` ≈ `1e6 km` ≈ 2.6 Earth-Moon distances, well outside the Earth-Moon
+/// system so the whole spacecraft trajectory fits in frame.
+pub const DEFAULT_OBSERVER_OFFSET_M: Vec3 = Vec3 {
+    x: 1.0e9,
+    y: 0.0,
+    z: 0.0,
+};
+
+/// Inertial reference point the observer offset is measured from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum ObserverOrigin {
+    /// Earth-Moon barycenter. This is the inertial origin in the circular
+    /// ephemeris (Earth and Moon positions are already barycentric).
+    Barycenter,
+    /// A fixed inertial point, metres.
+    Fixed(Vec3),
+}
+
+/// Fixed external vantage point for the third-person / observer camera.
+///
+/// The camera sits at `origin + offset` (metres, inertial frame) and tracks the
+/// spacecraft every frame, so the produced [`Pose`] has a constant translation
+/// while its rotation keeps the `+Z` optical axis pointed at the spacecraft.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ObserverConfig {
+    /// Offset from [`Self::origin`], metres. Defaults to
+    /// [`DEFAULT_OBSERVER_OFFSET_M`].
+    pub offset: Vec3,
+    /// Inertial reference point the offset is measured from.
+    pub origin: ObserverOrigin,
+}
+
+impl ObserverConfig {
+    /// Observer offset from the Earth-Moon barycenter.
+    pub fn new(offset: Vec3) -> Self {
+        Self {
+            offset,
+            origin: ObserverOrigin::Barycenter,
+        }
+    }
+
+    /// Build an observer from an offset expressed in kilometres.
+    pub fn from_km(x: f64, y: f64, z: f64) -> Self {
+        Self::new(Vec3::new(x * 1.0e3, y * 1.0e3, z * 1.0e3))
+    }
+
+    /// Observer offset relative to a fixed inertial point.
+    pub fn from_fixed(point_m: Vec3, offset: Vec3) -> Self {
+        Self {
+            offset,
+            origin: ObserverOrigin::Fixed(point_m),
+        }
+    }
+
+    /// Absolute inertial position of the observer camera, metres.
+    pub fn camera_position_m(&self) -> Vec3 {
+        match self.origin {
+            ObserverOrigin::Barycenter => self.offset,
+            ObserverOrigin::Fixed(point) => point.add(self.offset),
+        }
+    }
+
+    /// Observer offset relative to its origin, kilometres.
+    pub fn offset_km(&self) -> Vec3 {
+        self.offset.scale(1.0e-3)
+    }
+
+    /// Absolute inertial position of the observer camera, kilometres.
+    pub fn camera_position_km(&self) -> Vec3 {
+        self.camera_position_m().scale(1.0e-3)
+    }
+}
+
+impl Default for ObserverConfig {
+    fn default() -> Self {
+        Self::new(DEFAULT_OBSERVER_OFFSET_M)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Pose / SE(3) transform
@@ -155,35 +252,15 @@ fn identity_matrix() -> [[f64; 3]; 3] {
     [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
 }
 
-/// Build a camera pose from a propagator state and a synthetic pointing law.
+/// Build a camera pose that sits at `origin_m` and looks at `target_m`.
 ///
-/// The camera sits at the spacecraft position and looks at the requested body.
-/// `+Z` is the optical axis, `+X` points right, and `+Y` points down, matching
-/// the OpenCV convention Cosmos uses for camera actions.
-///
-/// Input state positions are metres (the [`dynamics`] convention). The returned
-/// pose translation is in **kilometres** so that [`to_action`] can divide by a
-/// scale `k` expressed in km per Cosmos-metre.
-///
-/// [`PointingLaw::Data`] falls back to Earth pointing: the canonical
-/// `t,x,y,z,vx,vy,vz` trajectory carries no attitude, so there is no "real"
-/// attitude to consume here. Every manifest records the law that was applied.
-pub fn state_to_pose(
-    state: &dynamics::State,
-    pointing: PointingLaw,
-    t: f64,
-    config: &dynamics::Config,
-) -> Pose {
-    let (earth, moon) = dynamics::earth_moon_positions(t, config);
-    let target = match pointing {
-        PointingLaw::Moon => moon,
-        // `Data` is a request for measured attitude, which this input format
-        // does not have; Earth pointing is the documented fallback.
-        PointingLaw::Earth | PointingLaw::Data => earth,
-    };
-
-    let origin_km = state.r.scale(1.0e-3);
-    let target_km = target.scale(1.0e-3);
+/// Both inputs are metres in the inertial frame; the returned [`Pose`]
+/// translation is in **kilometres**. `+Z` is the optical axis, `+X` points
+/// right, and `+Y` points down, matching the OpenCV convention Cosmos uses for
+/// camera actions.
+fn look_at_pose(origin_m: Vec3, target_m: Vec3) -> Pose {
+    let origin_km = origin_m.scale(1.0e-3);
+    let target_km = target_m.scale(1.0e-3);
 
     // Optical axis (camera +Z).
     let mut forward = normalize(target_km.sub(origin_km));
@@ -211,6 +288,68 @@ pub fn state_to_pose(
         rotation,
         translation: origin_km,
     }
+}
+
+/// Absolute inertial spacecraft position in kilometres.
+pub fn spacecraft_position_km(state: &dynamics::State) -> Vec3 {
+    state.r.scale(1.0e-3)
+}
+
+/// Build a camera pose from a propagator state and a synthetic pointing law.
+///
+/// The camera sits at the spacecraft position and looks at the requested body.
+/// `+Z` is the optical axis, `+X` points right, and `+Y` points down, matching
+/// the OpenCV convention Cosmos uses for camera actions.
+///
+/// Input state positions are metres (the [`dynamics`] convention). The returned
+/// pose translation is in **kilometres** so that [`to_action`] can divide by a
+/// scale `k` expressed in km per Cosmos-metre.
+///
+/// [`PointingLaw::Data`] falls back to Earth pointing: the canonical
+/// `t,x,y,z,vx,vy,vz` trajectory carries no attitude, so there is no "real"
+/// attitude to consume here. Every manifest records the law that was applied.
+///
+/// [`PointingLaw::Observer`] uses the default third-person vantage point; use
+/// [`state_to_pose_with_observer`] to supply a custom one.
+pub fn state_to_pose(
+    state: &dynamics::State,
+    pointing: PointingLaw,
+    t: f64,
+    config: &dynamics::Config,
+) -> Pose {
+    state_to_pose_with_observer(state, pointing, t, config, &ObserverConfig::default())
+}
+
+/// Like [`state_to_pose`], but lets [`PointingLaw::Observer`] use a custom
+/// vantage point.
+///
+/// For the ego laws (`earth`, `moon`, `data`) the observer is ignored. For
+/// `observer`, the camera is parked at [`ObserverConfig::camera_position_m`] and
+/// its `+Z` optical axis is pointed at the spacecraft; the pose translation is
+/// the (constant) observer position in kilometres, so the frame-to-frame deltas
+/// capture how the camera rotates to follow the spacecraft.
+pub fn state_to_pose_with_observer(
+    state: &dynamics::State,
+    pointing: PointingLaw,
+    t: f64,
+    config: &dynamics::Config,
+    observer: &ObserverConfig,
+) -> Pose {
+    if pointing == PointingLaw::Observer {
+        return look_at_pose(observer.camera_position_m(), state.r);
+    }
+
+    let (earth, moon) = dynamics::earth_moon_positions(t, config);
+    let target = match pointing {
+        PointingLaw::Moon => moon,
+        // `Data` is a request for measured attitude, which this input format
+        // does not have; Earth pointing is the documented fallback.
+        PointingLaw::Earth | PointingLaw::Data => earth,
+        // Handled above; kept for exhaustiveness.
+        PointingLaw::Observer => earth,
+    };
+
+    look_at_pose(state.r, target)
 }
 
 // Removed duplicate delta_transform here.
@@ -270,6 +409,9 @@ impl IntoBuilderArg for usize {
 pub struct PoseBuilder {
     pub k: f64,
     pub pointing: PointingLaw,
+    /// Third-person vantage point, used only when `pointing` is
+    /// [`PointingLaw::Observer`].
+    pub observer: ObserverConfig,
 }
 
 impl PoseBuilder {
@@ -286,26 +428,54 @@ impl PoseBuilder {
                 BuilderArg::Pointing(p) => pointing = p,
             }
         }
-        Self { k, pointing }
+        Self {
+            k,
+            pointing,
+            observer: ObserverConfig::default(),
+        }
     }
 
     pub fn new_with_pointing(pointing: PointingLaw, k: f64) -> Self {
-        Self { k, pointing }
+        Self {
+            k,
+            pointing,
+            observer: ObserverConfig::default(),
+        }
     }
 
     pub fn from_pointing_and_scale(pointing: PointingLaw, k: f64) -> Self {
-        Self { k, pointing }
+        Self {
+            k,
+            pointing,
+            observer: ObserverConfig::default(),
+        }
     }
 
     pub fn with_scale(k: f64) -> Self {
         Self {
             k,
             pointing: PointingLaw::Earth,
+            observer: ObserverConfig::default(),
         }
     }
 
     pub fn with_pointing(pointing: PointingLaw) -> Self {
-        Self { k: 1.0, pointing }
+        Self {
+            k: 1.0,
+            pointing,
+            observer: ObserverConfig::default(),
+        }
+    }
+
+    /// Set the third-person vantage point (used by [`PointingLaw::Observer`]).
+    pub fn with_observer(mut self, observer: ObserverConfig) -> Self {
+        self.observer = observer;
+        self
+    }
+
+    /// Mutate the third-person vantage point in place.
+    pub fn set_observer(&mut self, observer: ObserverConfig) {
+        self.observer = observer;
     }
 
     pub fn scale(&self) -> f64 {
@@ -317,7 +487,7 @@ impl PoseBuilder {
     }
 
     pub fn pose(&self, state: &State, t: f64, config: &Config) -> Pose {
-        state_to_pose(state, self.pointing, t, config)
+        state_to_pose_with_observer(state, self.pointing, t, config, &self.observer)
     }
 
     pub fn delta(&self, prev: &Pose, curr: &Pose) -> Pose {
@@ -335,7 +505,15 @@ impl PoseBuilder {
     pub fn poses_from_states(&self, states: &[State], times: &[f64], config: &Config) -> Vec<Pose> {
         let n = states.len().min(times.len());
         (0..n)
-            .map(|i| state_to_pose(&states[i], self.pointing, times[i], config))
+            .map(|i| {
+                state_to_pose_with_observer(
+                    &states[i],
+                    self.pointing,
+                    times[i],
+                    config,
+                    &self.observer,
+                )
+            })
             .collect()
     }
 
@@ -354,6 +532,7 @@ impl Default for PoseBuilder {
         Self {
             k: 1.0,
             pointing: PointingLaw::Earth,
+            observer: ObserverConfig::default(),
         }
     }
 }
@@ -846,6 +1025,97 @@ mod tests {
                 * (pose.rotation[1][0] * pose.rotation[2][1]
                     - pose.rotation[1][1] * pose.rotation[2][0]);
         assert!((det - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn observer_parks_camera_and_points_at_spacecraft() {
+        let config = dynamics::Config::default();
+        let state = dynamics::State {
+            r: Vec3::new(7.0e6, 0.0, 0.0),
+            v: Vec3::ZERO,
+        };
+        let observer = ObserverConfig::from_km(1.0e6, 0.0, 0.0);
+        let pose =
+            state_to_pose_with_observer(&state, PointingLaw::Observer, 0.0, &config, &observer);
+
+        // Camera translation is the fixed vantage point (km), not the craft.
+        assert!((pose.translation.x - 1.0e6).abs() < 1e-9);
+        assert!(pose.translation.y.abs() < 1e-9);
+        assert!(pose.translation.z.abs() < 1e-9);
+
+        // +Z (third column) points from the observer back at the spacecraft: the
+        // craft is at +X relative to the camera, so the axis is -X.
+        let forward = Vec3::new(
+            pose.rotation[0][2],
+            pose.rotation[1][2],
+            pose.rotation[2][2],
+        );
+        assert!((forward.x + 1.0).abs() < 1e-9);
+        assert!(forward.y.abs() < 1e-9);
+        assert!(forward.z.abs() < 1e-9);
+
+        // Absolute spacecraft position is available independently.
+        let sp = spacecraft_position_km(&state);
+        assert!((sp.x - 7_000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn observer_translation_is_fixed_while_rotation_tracks() {
+        let config = dynamics::Config::default();
+        let observer = ObserverConfig::from_km(1.0e4, 0.0, 0.0);
+        let s0 = dynamics::State {
+            r: Vec3::new(7.0e6, 0.0, 0.0),
+            v: Vec3::ZERO,
+        };
+        let s1 = dynamics::State {
+            r: Vec3::new(0.0, 7.0e6, 0.0),
+            v: Vec3::ZERO,
+        };
+        let p0 = state_to_pose_with_observer(&s0, PointingLaw::Observer, 0.0, &config, &observer);
+        let p1 = state_to_pose_with_observer(&s1, PointingLaw::Observer, 0.0, &config, &observer);
+
+        // The observer does not move between frames...
+        assert!(approx_vec(p0.translation, p1.translation));
+        // ...but it rotates to keep the spacecraft centred.
+        let mut diff = 0.0;
+        for i in 0..3 {
+            for j in 0..3 {
+                diff += (p0.rotation[i][j] - p1.rotation[i][j]).abs();
+            }
+        }
+        assert!(diff > 0.1, "observer rotation did not track: diff={diff}");
+    }
+
+    #[test]
+    fn posebuilder_observer_matches_standalone_helper() {
+        let config = dynamics::Config::default();
+        let state = dynamics::State {
+            r: Vec3::new(3.8e8, 1.0e7, 5.0e6),
+            v: Vec3::ZERO,
+        };
+        let observer = ObserverConfig::from_km(-2.0e5, 5.0e5, 1.0e5);
+        let builder =
+            PoseBuilder::new_with_pointing(PointingLaw::Observer, 1000.0).with_observer(observer);
+        let from_builder = builder.pose(&state, 0.0, &config);
+        let direct =
+            state_to_pose_with_observer(&state, PointingLaw::Observer, 0.0, &config, &observer);
+        assert!(approx_pose(from_builder, direct));
+    }
+
+    #[test]
+    fn default_observer_offset_is_used_by_state_to_pose() {
+        let config = dynamics::Config::default();
+        let state = dynamics::State {
+            r: Vec3::new(7.0e6, 0.0, 0.0),
+            v: Vec3::ZERO,
+        };
+        let pose = state_to_pose(&state, PointingLaw::Observer, 0.0, &config);
+        let expected = DEFAULT_OBSERVER_OFFSET_M.scale(1.0e-3);
+        assert!(approx_vec(pose.translation, expected));
+    }
+
+    fn approx_vec(a: Vec3, b: Vec3) -> bool {
+        (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9 && (a.z - b.z).abs() < 1e-9
     }
 
     fn approx_pose(a: Pose, b: Pose) -> bool {

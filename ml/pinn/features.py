@@ -1,11 +1,11 @@
 """Time-derived feature engineering for residual tables.
 
 Replaces the raw (and badly scaled) sample time with a small set of
-well-scaled, physically meaningful features so that KAN / MLP / SINDy train
-stably.  See ``docs/kan-feature-plan.md``.
+well-scaled, physically meaningful features so that PINN / MLP / SINDy train
+stably.  See ``docs/feature-plan.md``.
 
 The module is intentionally dependency-light: pandas is imported lazily (like
-:mod:`ml.kan.dataset`) and numpy is used for the trigonometry when available,
+:mod:`ml.pinn.dataset`) and numpy is used for the trigonometry when available,
 falling back to the stdlib :mod:`math` module otherwise.
 """
 
@@ -59,7 +59,7 @@ def engineer_features(df: Any, time_col: str | None = None):
     """Append time-derived features to ``df`` and return them.
 
     ``time_col`` names the sample-time column; when ``None`` it is auto-detected
-    with :func:`ml.kan.dataset.resolve_time_column`.  A :class:`ValueError` is
+    with :func:`ml.pinn.dataset.resolve_time_column`.  A :class:`ValueError` is
     raised when no time column can be found or the frame is empty.
 
     The input frame is **not** mutated.  Returns ``(df_out, feature_cols)`` where

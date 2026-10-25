@@ -1,6 +1,6 @@
 //! Mission, vehicle, and solver schemas for the Residual pipeline.
 //!
-//! The types here are the on-disk contract shared by the Rust core, the KAN
+//! The types here are the on-disk contract shared by the Rust core, the PINN
 //! training script, and the Cosmos job runners.  Everything is plain serde so
 //! a mission can be written as JSON or YAML without bespoke code.
 //!

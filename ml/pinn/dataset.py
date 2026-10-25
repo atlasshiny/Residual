@@ -36,7 +36,7 @@ def _import_pandas():
         import pandas as pd
     except ImportError as exc:  # pragma: no cover - depends on env
         raise ImportError(
-            "pandas is required for ml.kan.dataset. "
+            "pandas is required for ml.pinn.dataset. "
             "Install the 'data' extra: `uv sync --extra data` "
             "or `pip install pandas pyarrow`."
         ) from exc
@@ -48,7 +48,7 @@ def _import_pyarrow():
         import pyarrow as pa
     except ImportError as exc:  # pragma: no cover - depends on env
         raise ImportError(
-            "pyarrow is required for parquet support in ml.kan.dataset. "
+            "pyarrow is required for parquet support in ml.pinn.dataset. "
             "Install the 'data' extra: `uv sync --extra data` "
             "or `pip install pyarrow`."
         ) from exc

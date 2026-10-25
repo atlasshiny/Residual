@@ -24,6 +24,13 @@ use std::path::Path;
 
 use dynamics::{State, Vec3};
 
+pub mod spice;
+
+pub use spice::{
+    Body, Ephemeris, KernelKind, KernelPath, KernelSet, LeapSecondTable, MockEphemeris,
+    SpacecraftMock, SpiceError,
+};
+
 /// One reference epoch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReferenceSample {
@@ -144,6 +151,29 @@ impl Telemetry {
 
     pub fn states(&self) -> Vec<State> {
         self.samples.iter().map(|s| s.state).collect()
+    }
+
+    /// Build a reference trajectory by sampling an ephemeris.
+    ///
+    /// `times` are TDB seconds past J2000 (the SPICE ephemeris-time
+    /// convention); each becomes the `t` column of the returned telemetry.
+    /// `ephemeris` yields the state of `target` relative to `observer` in SI
+    /// units, so a real SPICE kernel and the analytic [`spice::MockEphemeris`]
+    /// produce the same shape of data.
+    pub fn from_ephemeris(
+        ephemeris: &dyn Ephemeris,
+        target: Body,
+        observer: Body,
+        times: &[f64],
+    ) -> Result<Self, IngestError> {
+        let mut samples = Vec::with_capacity(times.len());
+        for &t in times {
+            let state = ephemeris
+                .state_relative(target, observer, t)
+                .map_err(|e| IngestError::Ephemeris(e.to_string()))?;
+            samples.push(ReferenceSample { t, state });
+        }
+        Self::new(samples)
     }
 
     /// Linear interpolation at `t`, or `None` outside the sampled range.
@@ -285,6 +315,7 @@ pub enum IngestError {
         previous: f64,
         current: f64,
     },
+    Ephemeris(String),
 }
 
 impl fmt::Display for IngestError {
@@ -317,6 +348,7 @@ impl fmt::Display for IngestError {
                 f,
                 "line {line}: time must increase (previous {previous}, current {current})"
             ),
+            IngestError::Ephemeris(msg) => write!(f, "ephemeris error: {msg}"),
         }
     }
 }

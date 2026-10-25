@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Residual — Orbit, KAN &amp; Cosmos Viewer</title>
+    <title>Residual — Orbit, PINN &amp; Cosmos Viewer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -27,7 +27,7 @@
           <div class="brand-mark" aria-hidden="true"></div>
           <div class="brand-text">
             <span class="brand-name">Residual</span>
-            <span class="brand-sub">Orbit trajectory &amp; KAN analysis</span>
+            <span class="brand-sub">Orbit trajectory &amp; PINN/SINDy analysis</span>
           </div>
         </div>
         <div class="topbar-center">
@@ -73,12 +73,12 @@
           <dl class="kv" id="traj-kv"></dl>
         </section>
 
-        <section class="card" id="kan-card" data-mode-panel="orbit">
+        <section class="card" id="pinn-card" data-mode-panel="orbit">
           <div class="card-head">
-            <h2>KAN result</h2>
-            <span class="status-dot" id="kan-dot"></span>
+            <h2>PINN result</h2>
+            <span class="status-dot" id="pinn-dot"></span>
           </div>
-          <p id="kan-status" class="status-text">Loading KAN result…</p>
+          <p id="pinn-status" class="status-text">Loading PINN result…</p>
 
           <div class="equation-block">
             <div class="eq-label">Target</div>
@@ -88,11 +88,11 @@
           </div>
 
           <h3 class="subhead">Metrics</h3>
-          <div class="metrics-grid" id="kan-metrics"></div>
+          <div class="metrics-grid" id="pinn-metrics"></div>
 
           <details class="raw-json">
             <summary>Raw JSON</summary>
-            <pre id="kan-raw"></pre>
+            <pre id="pinn-raw"></pre>
           </details>
         </section>
 
@@ -185,8 +185,8 @@
           <input type="text" id="set-trajectoryPath" data-setting="trajectoryPath" spellcheck="false" class="settings-input" placeholder="./data/trajectory.json" />
         </div>
         <div class="settings-field">
-          <label for="set-kanPath">KAN result JSON path</label>
-          <input type="text" id="set-kanPath" data-setting="kanPath" spellcheck="false" class="settings-input" placeholder="./data/kan_result.json" />
+          <label for="set-pinnPath">PINN result JSON path</label>
+          <input type="text" id="set-pinnPath" data-setting="pinnPath" spellcheck="false" class="settings-input" placeholder="./data/pinn_result.json" />
         </div>
         <div class="settings-field">
           <label for="set-jobDir">Cosmos job directory</label>

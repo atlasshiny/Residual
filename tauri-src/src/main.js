@@ -10,13 +10,13 @@ const sceneStatus = document.getElementById("scene-status");
 const trajStatus = document.getElementById("trajectory-status");
 const trajDot = document.getElementById("traj-dot");
 const trajKv = document.getElementById("traj-kv");
-const kanStatus = document.getElementById("kan-status");
-const kanDot = document.getElementById("kan-dot");
+const pinnStatus = document.getElementById("pinn-status");
+const pinnDot = document.getElementById("pinn-dot");
 const eqTarget = document.getElementById("eq-target");
 const eqSindy = document.getElementById("eq-sindy");
 const eqSindyLabel = document.getElementById("eq-sindy-label");
-const kanMetrics = document.getElementById("kan-metrics");
-const kanRaw = document.getElementById("kan-raw");
+const pinnMetrics = document.getElementById("pinn-metrics");
+const pinnRaw = document.getElementById("pinn-raw");
 const stripMetrics = document.getElementById("strip-metrics");
 
 const autoRotateCb = document.getElementById("auto-rotate");
@@ -187,17 +187,8 @@ function buildFallbackNote(msg) {
   return div;
 }
 
-/* Show a symbolic string for the equation. Prefer the SINDy expression; if
-   absent, summarize the KAN edge splines so the panel is never empty. */
-function describeKanEdges(edges) {
-  if (!Array.isArray(edges) || edges.length === 0) return null;
-  return edges
-    .map((e) => {
-      const coeffs = (e.coeffs || []).map((c) => c.toFixed(4)).join(", ");
-      return `spline x${e.i}→z${e.j} · coeffs (${coeffs}) · r² ${fmt(e.r2, 3)}`;
-    })
-    .join("  |  ");
-}
+/* Show a symbolic string for the equation. Prefer the SINDy expression from
+   the PINN result; nothing else is needed for the panel. */
 
 /* ---------------- resize ---------------- */
 function resize() {
@@ -211,9 +202,9 @@ window.addEventListener("resize", resize);
 
 /* ---------------- data loading ---------------- */
 let trajectoryLoaded = false;
-let kanLoaded = false;
+let pinnLoaded = false;
 let trajectoryFailed = false;
-let kanFailed = false;
+let pinnFailed = false;
 let settledCount = 0;
 function settle() {
   settledCount++;
@@ -312,7 +303,7 @@ async function loadTrajectory() {
     stripMetrics.prepend(stripCard);
 
     trajectoryLoaded = true;
-    sceneStatus.textContent = (trajectoryLoaded && kanLoaded) ? "Scene ready" : sceneStatus.textContent;
+    sceneStatus.textContent = (trajectoryLoaded && pinnLoaded) ? "Scene ready" : sceneStatus.textContent;
     settle();
   } catch (error) {
     const message = fileError("Trajectory data unavailable", src, error);
@@ -326,85 +317,83 @@ async function loadTrajectory() {
   }
 }
 
-async function loadKanResult() {
-  const src = settings.kanPath || "./data/kan_result.json";
-  kanLoaded = false;
-  const card = document.getElementById("kan-card");
+async function loadPinnResult() {
+  const src = settings.pinnPath || "./data/pinn_result.json";
+  pinnLoaded = false;
+  const card = document.getElementById("pinn-card");
   card?.querySelectorAll(".fallback-note").forEach((n) => n.remove());
-  stripMetrics.querySelectorAll('[data-strip="kan"]').forEach((n) => n.remove());
-  setDot(kanDot, "loading");
+  stripMetrics.querySelectorAll('[data-strip="pinn"]').forEach((n) => n.remove());
+  setDot(pinnDot, "loading");
   try {
     const response = await fetch(src);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
 
-    const target = (data.target || "—").toString();
-    const kan = data.kan || {};
+    const target = (data.target || "residual").toString();
+    const pinn = data.pinn || {};
     const sindy = data.sindy || {};
-    let sindyExpr = (data.sindy && data.sindy.expression) ? data.sindy.expression : null;
-    let eqKind = "SINDy discovered";
-    if (!sindyExpr) {
-      sindyExpr = describeKanEdges(kan.edges);
-      eqKind = "Learned (KAN edges)";
-    }
-    eqSindyLabel.textContent = eqKind;
+    const mlp = data.mlp || {};
+    const linreg = data.linreg || {};
+    const sindyExpr = sindy.expr || sindy.expression || null;
+    eqSindyLabel.textContent = "SINDy discovered";
     eqTarget.textContent = target;
     eqSindy.textContent = sindyExpr || "—";
 
-    kanRaw.textContent = JSON.stringify(data, null, 2);
+    pinnRaw.textContent = JSON.stringify(data, null, 2);
 
     // metrics cards
-    kanMetrics.innerHTML = "";
-    const mlp = data.mlp || {};
+    pinnMetrics.innerHTML = "";
     const cards = [
-      ["KAN train R²", fmt(kan.train_r2, 4), true],
-      ["KAN train MSE", fmt(kan.train_mse, 5), false],
-      ["KAN params", kan.num_parameters ?? "—", false],
-      ["KAN degree", kan.degree ?? "—", false],
+      ["PINN train R²", fmt(pinn.train_r2, 4), true],
+      ["PINN train MSE", fmt(pinn.train_mse, 5), false],
+      ["PINN test R²", fmt(pinn.test_r2, 4), false],
       ["SINDy train R²", fmt(sindy.train_r2, 4), true],
       ["SINDy train MSE", fmt(sindy.train_mse, 5), false],
       ["MLP train R²", fmt(mlp.train_r2, 4), false],
       ["MLP train MSE", fmt(mlp.train_mse, 5), false],
+      ["LinearReg train R²", fmt(linreg.train_r2, 4), false],
+      ["LinearReg train MSE", fmt(linreg.train_mse, 5), false],
       ["Samples", data.n_samples ?? "—", false],
     ];
     for (const [label, value, accent] of cards) {
-      kanMetrics.appendChild(buildMetricCard(label, value, { accent }));
+      pinnMetrics.appendChild(buildMetricCard(label, value, { accent }));
     }
 
-    kanStatus.textContent = "Loaded";
-    setDot(kanDot, "ok");
+    pinnStatus.textContent = "Loaded";
+    setDot(pinnDot, "ok");
 
     // strip metrics
     [
-      buildStripCard("KAN R²", fmt(kan.train_r2, 4), "accent"),
+      buildStripCard("PINN R²", fmt(pinn.train_r2, 4), "accent"),
       buildStripCard("SINDy R²", fmt(sindy.train_r2, 4), "accent"),
       buildStripCard("MLP R²", fmt(mlp.train_r2, 4), ""),
+      buildStripCard("LinearReg R²", fmt(linreg.train_r2, 4), ""),
       buildStripCard("Samples", data.n_samples ?? "—", ""),
     ].forEach((c) => {
-      c.dataset.strip = "kan";
+      c.dataset.strip = "pinn";
       stripMetrics.appendChild(c);
     });
 
-    kanLoaded = true;
-    sceneStatus.textContent = (trajectoryLoaded && kanLoaded) ? "Scene ready" : sceneStatus.textContent;
+    pinnLoaded = true;
+    sceneStatus.textContent = (trajectoryLoaded && pinnLoaded) ? "Scene ready" : sceneStatus.textContent;
     settle();
   } catch (error) {
-    const message = fileError("KAN result unavailable", src, error);
-    kanStatus.textContent = "KAN result unavailable — see note below";
-    setDot(kanDot, "err");
-    kanMetrics.innerHTML = "";
+    const message = fileError("PINN result unavailable", src, error);
+    pinnStatus.textContent = "PINN result unavailable — see note below";
+    setDot(pinnDot, "err");
+    pinnMetrics.innerHTML = "";
     eqSindyLabel.textContent = "SINDy discovered";
     eqTarget.textContent = "—";
     eqSindy.textContent = "—";
-    kanMetrics.appendChild(buildFallbackNote(`${message}. Equations and metrics will stay empty.`));
-    kanFailed = true;
+    pinnMetrics.appendChild(buildFallbackNote(`${message}. Equations and metrics will stay empty.`));
+    pinnFailed = true;
     showError(message);
     settle();
   }
 }
 
 function maybeFinishLoading() {
-  if (trajectoryLoaded && kanLoaded) {
+  if (trajectoryLoaded && pinnLoaded) {
     setLoading(false);
     sceneStatus.textContent = "Scene ready";
   }
@@ -960,10 +949,10 @@ settingsResetBtn.addEventListener("click", () => {
   flashSaved();
 });
 
-/* re-fetch trajectory / kan result from the configured paths */
+/* re-fetch trajectory / PINN result from the configured paths */
 reloadDataBtn.addEventListener("click", () => {
   loadTrajectory();
-  loadKanResult();
+  loadPinnResult();
 });
 
 /* ---------------- animate ---------------- */
@@ -1008,7 +997,7 @@ resize();
 updateViewForMode();
 animate();
 loadTrajectory();
-loadKanResult();
+loadPinnResult();
 
 // failsafe: hide loader after 6s even if something stalls
 setTimeout(() => setLoading(false), 6000);

@@ -6,7 +6,7 @@ const KEY = "residual-settings-v1";
 export const DEFAULTS = Object.freeze({
   /* data source paths */
   trajectoryPath: "./data/trajectory.json",
-  kanPath: "./data/kan_result.json",
+  pinnPath: "./data/pinn_result.json",
   jobDir: "./data/demo_job/",
 
   /* display */

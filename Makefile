@@ -1,11 +1,11 @@
-.PHONY: all cuda rust python test fetch-data residual kan test-cpu test-cuda tauri bench clean
+.PHONY: all cuda rust python test fetch-data residual train test-cpu test-cuda tauri bench clean
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
 HORIZONS_ARGS ?=
 CONVERT_ARGS ?=
-KAN_DATA ?= data/residual_table.csv
-KAN_ARGS ?= $(if $(wildcard $(KAN_DATA)),--data $(KAN_DATA),)
+DATA ?= data/residual_table.csv
+ARGS ?= $(if $(wildcard $(DATA)),--data $(DATA),)
 BENCH_ARGS ?= --benchmark_min_time=1s
 
 all: cuda rust python
@@ -38,11 +38,11 @@ data/reference.csv:
 residual: data/reference.csv
 	cargo run -p residual --example residual_pipeline -- data/reference.csv data/residual_table.csv
 
-# Train KAN/MLP/SINDy.  Uses data/residual_table.csv when present, otherwise
+# Train PINN/MLP/SINDy.  Uses data/residual_table.csv when present, otherwise
 # falls back to the synthetic demo.  Override with e.g.
-#   make kan KAN_DATA=other.csv KAN_ARGS="--data other.csv --epochs 50"
-kan:
-	uv run --extra data python -m ml.kan.run $(KAN_ARGS)
+#   make train DATA=other.csv ARGS="--data other.csv --epochs 50"
+train:
+	uv run --extra data python -m ml.pinn.run $(ARGS)
 
 test: cuda python
 	uv run --extra dev --extra data --extra gpu pytest -q tests ml

@@ -1,6 +1,6 @@
 # Residual — Architecture
 
-A CUDA/C++ orbital propagator that replays an Artemis/Orion trajectory, measures where physics diverges from reality, and uses a KAN to output a readable closed-form correction. **Cosmos 3** is the render-and-validate layer: it turns the physics into photoreal video and independently checks that the video still encodes the motion we gave it.
+A CUDA/C++ orbital propagator that replays an Artemis/Orion trajectory, measures where physics diverges from reality, and uses PINN/SINDy to output a readable closed-form correction. **Cosmos 3** is the render-and-validate layer: it turns the physics into photoreal video and independently checks that the video still encodes the motion we gave it.
 
 > **Status legend.** `[paper]` = stated in the Cosmos 3 technical report (arXiv 2606.02800v4, 23 Jun 2026). `[infer]` = our design decision or inference, needs testing. `[verify]` = must be confirmed against the repo, model card, or data source before relying on it.
 
@@ -22,13 +22,13 @@ If a judge swaps Cosmos 3 for an older video model, **inverse dynamics (job B be
 **Goals**
 1. FP64 n-body propagation in Rust, validated against SPICE/Horizons.
 2. Residual between propagated and reference trajectory, with burn windows masked.
-3. KAN → symbolic correction term, compared honestly against SINDy and an MLP.
+3. PINN/SINDy → symbolic correction term, compared honestly against baselines.
 4. Cosmos 3 renders the trajectory, then recovers pose from the video and reports error against the input.
 
 **Non-goals**
-- Cosmos does **not** improve the state estimate or feed the KAN. Video models do not conserve energy or obey orbital mechanics.
+- Cosmos does **not** improve the state estimate or feed the PINN. Video models do not conserve energy or obey orbital mechanics.
 - No real-time (60 FPS) Cosmos loop. Generation is offline (see §7).
-- No FP4/FP8 in the propagator. Low precision is acceptable only inside the KAN and Cosmos.
+- No FP4/FP8 in the propagator. Low precision is acceptable only inside the PINN and Cosmos.
 - Burn Δv or thrust are **not** Cosmos inputs. The Cosmos action space is relative pose deltas `[paper]`.
 
 ## 3. System diagram
@@ -45,7 +45,7 @@ If a judge swaps Cosmos 3 for an older video model, **inverse dynamics (job B be
  │                                   │                                   │
  │                         ┌─────────┴──────────┐                        │
  │                         ▼                    ▼                        │
- │                  KAN branch (§5)     Pose/Action builder (§6)         │
+ │                  PINN branch (§5)     Pose/Action builder (§6)         │
  └─────────────────────────┬────────────────────┬────────────────────────┘
                            │                    │ ΔT (9D) + control video
                            ▼                    ▼
@@ -61,7 +61,7 @@ If a judge swaps Cosmos 3 for an older video model, **inverse dynamics (job B be
                                                    ▼
                               Artifact store (clips, tensors, metrics, JSON)
                                                    ▼
-                              UI: orbit viewport · photoreal clip · KAN equation · error plots
+                              UI: orbit viewport · photoreal clip · PINN equation · error plots
 ```
 
 **Data flow rule:** physics is authoritative. Arrows into Cosmos carry pose and geometry. Arrows out of Cosmos go only to the evaluator and the UI.
@@ -83,9 +83,9 @@ The performance-critical propagator stays in CUDA/C++. Rust crates may still be 
 | `schema` | Vehicle and mission schemas (serde/JSON/YAML) | Stretch: "universal" spacecraft |
 | `ipc` | Job queue and artifact manifest | Talks to Cosmos workers over files + a small RPC |
 
-Validation targets for `dynamics`: energy and angular-momentum conservation on a two-body case, then agreement with Horizons over a chosen arc. Separate integrator error from missing physics before handing residuals to the KAN.
+Validation targets for `dynamics`: energy and angular-momentum conservation on a two-body case, then agreement with Horizons over a chosen arc. Separate integrator error from missing physics before handing residuals to the PINN.
 
-### 4.2 KAN branch (`ml/kan/`)
+### 4.2 PINN branch (`ml/pinn/`)
 
 - Input: residual time series (burn windows masked), plus features such as position relative to Earth and Moon.
 - Output: pruned symbolic expression for the correction term.
@@ -100,12 +100,12 @@ Python, reference PyTorch path first `[paper]` (§5.3.1: reference implementatio
 
 Tauri + Three.js. Shows predicted vs actual path, the symbolic equation, error plots, and plays pre-rendered Cosmos clips. It never waits on live generation.
 
-## 5. Residual and KAN contract
+## 5. Residual and PINN contract
 
 ```
 residual_table.parquet
   t_tdb, r_ref[3], v_ref[3], r_prop[3], v_prop[3], dr[3], dv[3], burn_mask, features...
-kan_result.json
+pinn_result.json
   expression, per-term coefficients, fit error, baselines {sindy, mlp}, masked_fraction
 ```
 
@@ -144,7 +144,7 @@ Trajectories span days, but clips are short (the paper's action evaluations use 
   "model": "Cosmos3-Nano | Cosmos3-Super",
   "window": {"t0_tdb": "...", "t1_tdb": "...", "time_compression": 0},
   "scale_k_km_per_m": 0,
-  "pointing_law": "earth | moon | data",
+  "pointing_law": "earth | moon | data | observer",
   "fps": 24, "frames": 120, "resolution": [704, 1280],
   "inputs": {"control_video": "path", "first_frame": "path", "actions": "path.npy", "prompt_json": "path"},
   "seed": 0
@@ -199,7 +199,7 @@ Nano's weights take about 32 GB of GPU memory `[framework docs]`, so one Nano jo
 | GPUs | Role |
 |---|---|
 | 0–5 | Nano workers: Sim-Transfer, inverse dynamics, forward dynamics, and `k` sweeps (job array, one GPU each) |
-| 6 | KAN training and baselines |
+| 6 | PINN training and baselines |
 | 7 | Control-video rendering and batched Monte Carlo (stretch) |
 | (on demand) | 4–8 GPU `torchrun` allocation for optional Super clips, separate from the above |
 
@@ -216,7 +216,7 @@ Nano's weights take about 32 GB of GPU memory `[framework docs]`, so one Nano jo
 | Question | Method | Reported |
 |---|---|---|
 | Is the propagator right? | Compare to Horizons/SPICE; conservation tests | Position error vs time |
-| Does the KAN find real physics? | Hold out time windows; compare to SINDy and MLP | Residual reduction, equation, physical plausibility |
+| Does the PINN find real physics? | Hold out time windows; compare to SINDy and MLP | Residual reduction, equation, physical plausibility |
 | Does Cosmos preserve geometry? | Job B on job A output, Sim(3) aligned | RRE, RTE, ATE per window and per `k` |
 | How far can the scale be pushed? | Sweep `k` | Error vs `k`, point where it breaks |
 | Does video hallucinate? | Compare generated frames to real imagery at known timestamps (apparent Earth size, phase) `[verify]` data | Where it holds and where it fails |
@@ -231,7 +231,7 @@ residual/
 ├─ architecture.md
 ├─ crates/ { ingest frames dynamics residual posebuilder evaluator schema ipc }
 ├─ ml/
-│  ├─ kan/        training, pruning, symbolic extraction, baselines
+│  ├─ pinn/        training, pruning, symbolic extraction, baselines
 │  └─ cosmos/     job runner, prompt upsampler, mode wrappers
 ├─ render/        headless control-video renderer
 ├─ ui/            Tauri + Three.js
@@ -246,7 +246,7 @@ residual/
 |---|---|---|
 | 0 (first hours) | Confirm Artemis/Orion data, formats, release dates; confirm HPC access and weights staged | Go/no-go on data; fallback to other lunar trajectories in Horizons |
 | 1 | CUDA propagator + frame tests + residual table | Matches Horizons within tolerance |
-| 2 | KAN + baselines | Equation produced, comparison table |
+| 2 | PINN + baselines | Equation produced, comparison table |
 | 3 | Pose builder + control renderer + job A on one window | One transfer clip with correct geometry |
 | 4 | Jobs B and C + evaluator | First RRE/RTE/ATE numbers, `k` sweep |
 | 5 | UI + cached clips + fallback demo | Full run without network |
@@ -258,7 +258,7 @@ residual/
 |---|---|
 | **1. CUDA/physics lead** | `src/kernels`, `frames`, `ingest`, `posebuilder`, integrator tests |
 | **2. Data and validation lead** | Data sourcing, time systems, burn masking, `evaluator`, Horizons comparison |
-| **3. ML lead** | KAN, baselines, Cosmos job runner, SLURM scripts |
+| **3. ML lead** | PINN, baselines, Cosmos job runner, SLURM scripts |
 | **4. Viz and demo lead** | Control renderer, UI, clip cache, fallback demo, slides |
 
 ## 13. Risks

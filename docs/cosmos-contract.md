@@ -162,6 +162,7 @@ t,x,y,z,vx,vy,vz
 |---|---|
 | `earth` | Camera at the spacecraft, optical axis toward the Earth centre. |
 | `moon` | Camera at the spacecraft, optical axis toward the Moon centre. |
+| `observer` | Third-person camera parked at a fixed external vantage point (`--observer-offset`, km, from the Earth-Moon barycenter) and pointed at the spacecraft. All poses share that fixed camera translation; the per-frame `ΔT` therefore encodes the rotation that keeps the spacecraft centred, and absolute spacecraft positions are recorded in `spacecraft_positions_km`. |
 | `data` | Request measured attitude. The canonical CSV has none, so the Rust builder falls back to Earth pointing and records that in `pointing_note`. |
 
 Positions come from `dynamics::earth_moon_positions(t, config)`; no SPICE
@@ -170,6 +171,13 @@ expects: `+Z` forward (optical axis), `+X` right, `+Y` down. The pose rotation
 matrix has those camera axes as its columns in the inertial frame. Every result
 must carry its pointing law; a synthetic attitude must never be presented as
 measured.
+
+When `pointing_law` is `observer`, the manifest also carries an `observer`
+object (`origin`, `offset_km`, `camera_position_km`) and a
+`spacecraft_positions_km` array (one `[x, y, z]` per frame, inertial
+kilometres). The single-frame `first_pose` translation is the observer camera
+position, not the spacecraft position; read the spacecraft location from
+`spacecraft_positions_km`.
 
 ### 3.4 Scale `k`
 
@@ -314,6 +322,12 @@ cargo run -p posebuilder --example pose_pipeline -- \
   trajectory.csv jobs/demo --job-id demo --mode inverse_dynamics \
   --t0 0 --t1 5 --fps 24 --frames 120 --scale-k 1000 --pointing earth
 
+# 1b. Third-person observer camera (optional --observer-offset, km).
+cargo run -p posebuilder --example pose_pipeline -- \
+  trajectory.csv jobs/demo_obs --job-id demo_obs --mode inverse_dynamics \
+  --t0 0 --t1 5 --fps 24 --frames 120 --scale-k 1000 \
+  --pointing observer --observer-offset 1e6,0,0
+
 # 2. Produce mock worker outputs.
 python scripts/mock_cosmos_worker.py jobs/demo
 
@@ -343,6 +357,10 @@ the checkpoint is staged.
 
 * `pointing_law: data` is not implemented for the canonical CSV; it falls back
   to Earth pointing and says so.
+* `pointing_law: observer` is synthetic: the vantage point is a fixed offset the
+  caller supplies, not a real external camera ephemeris. The observer offset is
+  measured from the Earth-Moon barycenter (the inertial origin of the circular
+  ephemeris).
 * Times are seconds in the CSV's time base, not parsed TDB calendar strings.
 * `actions.json` is JSON, not `.npy`. A real runner that requires `.npy` must
   convert it; the JSON stays the reviewable source of truth.

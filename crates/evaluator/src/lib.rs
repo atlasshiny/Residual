@@ -1,6 +1,12 @@
 //! Evaluator: integrate recovered ΔT, Sim(3)/Umeyama alignment, metrics.
 
+use std::error::Error;
 use std::f64::consts::PI;
+use std::fmt;
+use std::path::Path;
+
+#[cfg(feature = "serde")]
+use std::fs;
 
 pub use dynamics::Vec3;
 pub use posebuilder::{Config as DynConfig, State as DynState};
@@ -919,5 +925,619 @@ impl<'de> serde::Deserialize<'de> for Sim3 {
                 helper.translation[2],
             ),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Errors raised while loading job artifacts or evaluating a trajectory.
+#[derive(Debug)]
+pub enum EvalError {
+    Io(String, String),
+    Json(String),
+    Invalid(String),
+    Missing(String),
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EvalError::Io(path, err) => write!(f, "io error for {path}: {err}"),
+            EvalError::Json(err) => write!(f, "invalid JSON: {err}"),
+            EvalError::Invalid(msg) => write!(f, "invalid evaluator input: {msg}"),
+            EvalError::Missing(msg) => write!(f, "missing evaluator input: {msg}"),
+        }
+    }
+}
+
+impl Error for EvalError {}
+
+// ---------------------------------------------------------------------------
+// Job I/O: sample_outputs.json / job.json / metrics.json
+// ---------------------------------------------------------------------------
+
+/// A recovered or reference sequence: an absolute `first_pose` plus the 9D
+/// relative rows that follow it.  Integrate with [`Sequence::integrate`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sequence {
+    pub first_pose: Pose,
+    /// One 9D `[tx, ty, tz, r6]` row per frame transition.
+    pub rows: Vec<[f64; 9]>,
+    /// Kilometres per stored translation unit, applied only to translation.
+    pub km_per_unit: f64,
+}
+
+impl Sequence {
+    pub fn new(first_pose: Pose, rows: Vec<[f64; 9]>, km_per_unit: f64) -> Self {
+        Self {
+            first_pose,
+            rows,
+            km_per_unit,
+        }
+    }
+
+    /// Number of frames (one more than the number of transitions).
+    pub fn len(&self) -> usize {
+        self.rows.len() + 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Reconstruct the absolute trajectory `T_t = T_{t-1} · ΔT_t`.
+    pub fn integrate(&self) -> Vec<Pose> {
+        integrate_actions(&self.first_pose, &self.rows, self.km_per_unit)
+    }
+
+    /// Same as [`Sequence::integrate`] but returns positions only.
+    pub fn positions(&self) -> Vec<Vec3> {
+        poses_to_positions(&self.integrate())
+    }
+}
+
+/// Validate a list of raw 9D rows and copy them into fixed-size arrays.
+pub fn validate_rows(rows: &[Vec<f64>], label: &str) -> Result<Vec<[f64; 9]>, EvalError> {
+    let mut out = Vec::with_capacity(rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        if row.len() != 9 {
+            return Err(EvalError::Invalid(format!(
+                "{label}[{i}] has {} values, expected 9",
+                row.len()
+            )));
+        }
+        let mut action = [0.0; 9];
+        for (j, value) in row.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(EvalError::Invalid(format!("{label}[{i}][{j}] is not finite")));
+            }
+            action[j] = *value;
+        }
+        out.push(action);
+    }
+    Ok(out)
+}
+
+/// `job.json` as written by `posebuilder`/`ipc`: the ground-truth pose sequence
+/// lives in `first_pose` + `actions`.
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JobManifest {
+    pub schema: String,
+    pub job_id: String,
+    pub id: String,
+    pub mode: String,
+    pub model: String,
+    pub scale_k_km_per_m: f64,
+    pub pointing_law: String,
+    pub fps: f64,
+    pub frames: usize,
+    pub action_dim: usize,
+    pub action_encoding: String,
+    pub frame_times_tdb_s: Vec<f64>,
+    pub first_pose: Option<PoseJson>,
+    pub actions: Vec<Vec<f64>>,
+}
+
+#[cfg(feature = "serde")]
+impl Default for JobManifest {
+    fn default() -> Self {
+        Self {
+            schema: String::new(),
+            job_id: String::new(),
+            id: String::new(),
+            mode: String::new(),
+            model: String::new(),
+            scale_k_km_per_m: 1000.0,
+            pointing_law: String::new(),
+            fps: 24.0,
+            frames: 0,
+            action_dim: 9,
+            action_encoding: String::new(),
+            frame_times_tdb_s: Vec::new(),
+            first_pose: None,
+            actions: Vec::new(),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl JobManifest {
+    /// Read `job.json` from disk.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, EvalError> {
+        let path = path.as_ref();
+        let text = fs::read_to_string(path)
+            .map_err(|e| EvalError::Io(path.display().to_string(), e.to_string()))?;
+        Self::from_json(&text)
+    }
+
+    pub fn from_json(text: &str) -> Result<Self, EvalError> {
+        serde_json::from_str(text).map_err(|e| EvalError::Json(e.to_string()))
+    }
+
+    /// `job_id` wins over `id` when both are present.
+    pub fn effective_job_id(&self) -> &str {
+        if !self.job_id.is_empty() {
+            &self.job_id
+        } else {
+            &self.id
+        }
+    }
+
+    /// True when the manifest carries a usable ground-truth pose sequence.
+    pub fn has_actions(&self) -> bool {
+        self.first_pose.is_some() && !self.actions.is_empty()
+    }
+
+    /// Ground-truth sequence from `first_pose` + `actions`.
+    pub fn sequence(&self) -> Result<Sequence, EvalError> {
+        let first_pose = self
+            .first_pose
+            .as_ref()
+            .ok_or_else(|| EvalError::Missing("job.json has no first_pose".into()))?
+            .to_pose();
+        if self.actions.is_empty() {
+            return Err(EvalError::Missing(
+                "job.json has no actions to reconstruct a reference trajectory".into(),
+            ));
+        }
+        let rows = validate_rows(&self.actions, "actions")?;
+        let k = if self.scale_k_km_per_m.is_finite() && self.scale_k_km_per_m > 0.0 {
+            self.scale_k_km_per_m
+        } else {
+            1000.0
+        };
+        Ok(Sequence::new(first_pose, rows, k))
+    }
+}
+
+/// The absolute SE(3) transform serialised as `{rotation, translation_km}`.
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PoseJson {
+    pub rotation: [[f64; 3]; 3],
+    pub translation_km: [f64; 3],
+}
+
+#[cfg(feature = "serde")]
+impl PoseJson {
+    pub fn to_pose(&self) -> Pose {
+        Pose {
+            rotation: self.rotation,
+            translation: Vec3::new(
+                self.translation_km[0],
+                self.translation_km[1],
+                self.translation_km[2],
+            ),
+        }
+    }
+
+    pub fn from_pose(pose: &Pose) -> Self {
+        Self {
+            rotation: pose.rotation,
+            translation_km: [pose.translation.x, pose.translation.y, pose.translation.z],
+        }
+    }
+}
+
+/// `sample_outputs.json` as written by a Cosmos worker (see
+/// `docs/cosmos-contract.md` §4.1).  `poses` is the recovered action sequence,
+/// one 9D row per frame transition.
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SampleOutputs {
+    pub schema: String,
+    pub job_id: String,
+    pub mode: String,
+    pub model: String,
+    pub action_dim: usize,
+    pub action_encoding: String,
+    pub translation_unit: String,
+    pub scale_k_km_per_m: f64,
+    pub pointing_law: String,
+    pub fps: f64,
+    pub frames: usize,
+    pub first_pose: Option<PoseJson>,
+    pub poses: Vec<Vec<f64>>,
+    pub mock: bool,
+    pub note: Option<String>,
+}
+
+#[cfg(feature = "serde")]
+impl Default for SampleOutputs {
+    fn default() -> Self {
+        Self {
+            schema: String::new(),
+            job_id: String::new(),
+            mode: String::new(),
+            model: String::new(),
+            action_dim: 9,
+            action_encoding: String::new(),
+            translation_unit: String::from("cosmos_metre"),
+            scale_k_km_per_m: 1000.0,
+            pointing_law: String::new(),
+            fps: 24.0,
+            frames: 0,
+            first_pose: None,
+            poses: Vec::new(),
+            mock: false,
+            note: None,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl SampleOutputs {
+    /// Read `sample_outputs.json` from disk.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, EvalError> {
+        let path = path.as_ref();
+        let text = fs::read_to_string(path)
+            .map_err(|e| EvalError::Io(path.display().to_string(), e.to_string()))?;
+        Self::from_json(&text)
+    }
+
+    pub fn from_json(text: &str) -> Result<Self, EvalError> {
+        serde_json::from_str(text).map_err(|e| EvalError::Json(e.to_string()))
+    }
+
+    /// Kilometres per stored translation unit.  Rows are normally in Cosmos
+    /// metres, so the factor is `scale_k_km_per_m`; a literal `"km"` unit is a
+    /// no-op.
+    pub fn km_per_unit(&self) -> f64 {
+        match self.translation_unit.as_str() {
+            "km" => 1.0,
+            _ if self.scale_k_km_per_m.is_finite() && self.scale_k_km_per_m > 0.0 => {
+                self.scale_k_km_per_m
+            }
+            _ => 1000.0,
+        }
+    }
+
+    pub fn validated_rows(&self) -> Result<Vec<[f64; 9]>, EvalError> {
+        validate_rows(&self.poses, "poses")
+    }
+
+    /// True when the worker produced a pose sequence (false for `transfer`).
+    pub fn has_poses(&self) -> bool {
+        !self.poses.is_empty()
+    }
+
+    /// Build the recovered sequence.  `first_pose` falls back to the job
+    /// manifest when the worker omitted it.
+    pub fn sequence(&self, fallback_first_pose: Option<Pose>) -> Result<Sequence, EvalError> {
+        let first_pose = match &self.first_pose {
+            Some(pose) => pose.to_pose(),
+            None => fallback_first_pose.ok_or_else(|| {
+                EvalError::Missing(
+                    "no first_pose in sample_outputs.json or job.json; cannot reconstruct poses"
+                        .into(),
+                )
+            })?,
+        };
+        let rows = self.validated_rows()?;
+        if rows.is_empty() {
+            return Err(EvalError::Missing(
+                "sample_outputs.json has an empty poses array; nothing to evaluate".into(),
+            ));
+        }
+        Ok(Sequence::new(first_pose, rows, self.km_per_unit()))
+    }
+}
+
+/// Sim(3) alignment parameters, serialised for the metrics report.
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AlignmentReport {
+    pub scale: f64,
+    pub rotation: [[f64; 3]; 3],
+    pub translation: [f64; 3],
+}
+
+#[cfg(feature = "serde")]
+impl AlignmentReport {
+    pub fn from_sim3(sim: &Sim3) -> Self {
+        Self {
+            scale: sim.scale,
+            rotation: sim.rotation,
+            translation: [
+                sim.translation.x,
+                sim.translation.y,
+                sim.translation.z,
+            ],
+        }
+    }
+}
+
+/// The evaluator's output document (`cosmos-metrics/v1`).  Rotation error is
+/// primary: translation in space is not metric-reliable, so ATE is reported
+/// after a Sim(3)/Umeyama alignment.
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricsReport {
+    pub schema: String,
+    pub job_id: String,
+    pub mode: String,
+    pub model: String,
+    /// Path/description of the recovered `sample_outputs.json`.
+    pub source: String,
+    /// Path/description of the reference trajectory.
+    pub reference: String,
+    pub scale_k_km_per_m: f64,
+    /// Frames compared (min of recovered and reference lengths).
+    pub frames: usize,
+    /// Recovered transitions integrated (before truncation to `frames`).
+    pub pose_count: usize,
+    pub rotation_primary: bool,
+    pub aligned: bool,
+    pub rre_degrees: f64,
+    pub rte_metres: f64,
+    pub ate_metres: f64,
+    pub alignment: AlignmentReport,
+    pub generated_by: String,
+}
+
+/// Align `recovered` against `reference` and compute RRE/RTE/ATE.
+///
+/// Both sequences are integrated from their own `first_pose`; if `recovered`
+/// has no `first_pose` the reference's is used.  The returned report carries
+/// provenance copied from `outputs` and the optional `job`.
+#[cfg(feature = "serde")]
+pub fn report_for(
+    outputs: &SampleOutputs,
+    job: Option<&JobManifest>,
+    reference: &Sequence,
+    reference_label: &str,
+    source_label: &str,
+) -> Result<MetricsReport, EvalError> {
+    let fallback_first = job
+        .and_then(|j| j.first_pose.as_ref())
+        .map(|pose| pose.to_pose());
+    let recovered = outputs.sequence(fallback_first)?;
+    build_report(outputs, job, &recovered, reference, reference_label, source_label)
+}
+
+/// Like [`report_for`] but with a pre-built recovered [`Sequence`].
+#[cfg(feature = "serde")]
+pub fn build_report(
+    outputs: &SampleOutputs,
+    job: Option<&JobManifest>,
+    recovered: &Sequence,
+    reference: &Sequence,
+    reference_label: &str,
+    source_label: &str,
+) -> Result<MetricsReport, EvalError> {
+    let est = recovered.integrate();
+    let gt = reference.integrate();
+    let frames = est.len().min(gt.len());
+    if frames < 2 {
+        return Err(EvalError::Invalid(format!(
+            "need at least 2 poses to evaluate (recovered={}, reference={})",
+            est.len(),
+            gt.len()
+        )));
+    }
+    let est = &est[..frames];
+    let gt = &gt[..frames];
+
+    let metrics = evaluate(est, gt);
+    let est_pos = poses_to_positions(est);
+    let gt_pos = poses_to_positions(gt);
+    let sim = umeyama(&est_pos, &gt_pos);
+
+    let job_id = if !outputs.job_id.is_empty() {
+        outputs.job_id.clone()
+    } else {
+        job.map(|j| j.effective_job_id().to_string())
+            .unwrap_or_default()
+    };
+    let mode = non_empty(&outputs.mode)
+        .or_else(|| job.map(|j| j.mode.clone()))
+        .unwrap_or_default();
+    let model = non_empty(&outputs.model)
+        .or_else(|| job.map(|j| j.model.clone()))
+        .unwrap_or_default();
+    let scale_k = if outputs.scale_k_km_per_m.is_finite() && outputs.scale_k_km_per_m > 0.0 {
+        outputs.scale_k_km_per_m
+    } else {
+        job.and_then(|j| {
+            (j.scale_k_km_per_m.is_finite() && j.scale_k_km_per_m > 0.0)
+                .then_some(j.scale_k_km_per_m)
+        })
+        .unwrap_or(1000.0)
+    };
+
+    Ok(MetricsReport {
+        schema: METRICS_SCHEMA.to_string(),
+        job_id,
+        mode,
+        model,
+        source: source_label.to_string(),
+        reference: reference_label.to_string(),
+        scale_k_km_per_m: scale_k,
+        frames,
+        pose_count: recovered.rows.len(),
+        rotation_primary: true,
+        aligned: true,
+        rre_degrees: metrics.rre_degrees,
+        rte_metres: metrics.rte_metres,
+        ate_metres: metrics.ate_metres,
+        alignment: AlignmentReport::from_sim3(&sim),
+        generated_by: "evaluator".to_string(),
+    })
+}
+
+#[cfg(feature = "serde")]
+fn non_empty(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// Metrics schema identifier written into [`MetricsReport::schema`].
+pub const METRICS_SCHEMA: &str = "cosmos-metrics/v1";
+/// `sample_outputs.json` schema identifier (see the contract §4.1).
+pub const SAMPLE_OUTPUTS_SCHEMA: &str = "cosmos-sample-outputs/v1";
+
+/// Serialise a report as pretty JSON.
+#[cfg(feature = "serde")]
+pub fn metrics_json(report: &MetricsReport) -> Result<String, EvalError> {
+    serde_json::to_string_pretty(report).map_err(|e| EvalError::Json(e.to_string()))
+}
+
+/// Write a report to `path` (pretty JSON).
+#[cfg(feature = "serde")]
+pub fn write_metrics(
+    path: impl AsRef<Path>,
+    report: &MetricsReport,
+) -> Result<(), EvalError> {
+    let path = path.as_ref();
+    let text = metrics_json(report)?;
+    fs::write(path, text).map_err(|e| EvalError::Io(path.display().to_string(), e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Tests: JSON I/O and end-to-end evaluation
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "serde"))]
+mod io_tests {
+    use super::*;
+
+    const SAMPLE: &str = r#"{
+        "schema": "cosmos-sample-outputs/v1",
+        "job_id": "demo",
+        "mode": "inverse_dynamics",
+        "model": "Cosmos3-Nano",
+        "action_dim": 9,
+        "action_encoding": "translation_xyz + rot6d_first_two_columns",
+        "translation_unit": "cosmos_metre",
+        "scale_k_km_per_m": 1000.0,
+        "fps": 24,
+        "frames": 3,
+        "first_pose": {
+            "rotation": [[1,0,0],[0,1,0],[0,0,1]],
+            "translation_km": [7000, 0, 0]
+        },
+        "poses": [
+            [1.0, 0.0, 0.0, 1,0,0, 0,1,0],
+            [1.0, 0.0, 0.0, 1,0,0, 0,1,0]
+        ]
+    }"#;
+
+    #[test]
+    fn parses_sample_outputs() {
+        let outputs = SampleOutputs::from_json(SAMPLE).unwrap();
+        assert_eq!(outputs.job_id, "demo");
+        assert_eq!(outputs.poses.len(), 2);
+        assert!(outputs.has_poses());
+        let rows = outputs.validated_rows().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], 1.0);
+    }
+
+    #[test]
+    fn integrates_recovered_trajectory() {
+        let outputs = SampleOutputs::from_json(SAMPLE).unwrap();
+        let seq = outputs.sequence(None).unwrap();
+        // 2 transitions -> 3 frames.
+        assert_eq!(seq.len(), 3);
+        let traj = seq.integrate();
+        // Each row moves 1 cosmos-metre * k(1000) = 1000 km along x.
+        assert!((traj[0].translation.x - 7000.0).abs() < 1e-9);
+        assert!((traj[2].translation.x - 9000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rejects_bad_row_width() {
+        let bad = r#"{"poses": [[1,2,3]]}"#;
+        let outputs = SampleOutputs::from_json(bad).unwrap();
+        assert!(matches!(
+            outputs.validated_rows(),
+            Err(EvalError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn empty_poses_is_rejected() {
+        let outputs = SampleOutputs::from_json(r#"{"poses": []}"#).unwrap();
+        assert!(matches!(
+            outputs.sequence(None),
+            Err(EvalError::Missing(_))
+        ));
+    }
+
+    #[test]
+    fn reference_matches_recovered_gives_zero_error() {
+        let outputs = SampleOutputs::from_json(SAMPLE).unwrap();
+        let seq = outputs.sequence(None).unwrap();
+        let report = report_for(&outputs, None, &seq, "self", "test").unwrap();
+        assert!(report.ate_metres < 1e-9);
+        assert!(report.rre_degrees < 1e-9);
+        assert!(report.rte_metres < 1e-9);
+        assert_eq!(report.schema, METRICS_SCHEMA);
+        assert_eq!(report.frames, 3);
+    }
+
+    #[test]
+    fn job_manifest_reconstructs_reference() {
+        let job = JobManifest::from_json(
+            r#"{
+                "job_id": "demo",
+                "first_pose": {"rotation": [[1,0,0],[0,1,0],[0,0,1]], "translation_km": [0,0,0]},
+                "actions": [[1,0,0,1,0,0,0,1,0]],
+                "scale_k_km_per_m": 1000.0
+            }"#,
+        )
+        .unwrap();
+        assert!(job.has_actions());
+        let seq = job.sequence().unwrap();
+        assert_eq!(seq.len(), 2);
+        assert!((seq.integrate()[1].translation.x - 1000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sim3_transform_is_aligned_away() {
+        // Non-collinear reference points: Umeyama is degenerate on a line.
+        let gt: Vec<Vec3> = (0..6)
+            .map(|i| {
+                let a = i as f64 * 0.7;
+                Vec3::new(a.cos() * 100.0, a.sin() * 80.0, i as f64 * 25.0)
+            })
+            .collect();
+
+        let ang: f64 = 0.4;
+        let (c, s) = (ang.cos(), ang.sin());
+        let rot = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+        let scale = 3.0;
+        let offset = Vec3::new(10.0, -5.0, 2.0);
+        let est: Vec<Vec3> = gt
+            .iter()
+            .map(|p| mat_vec(rot, *p).scale(scale).add(offset))
+            .collect();
+
+        let m = ate_metres_points(&est, &gt);
+        assert!(m < 1e-6, "ATE after alignment should vanish, got {m}");
     }
 }

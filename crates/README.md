@@ -28,10 +28,10 @@ from the first reference state, resamples the trajectory at each reference
 epoch, and writes `t,drx,dry,drz,dvx,dvy,dvz`. Burn windows from the optional
 mission file are dropped from the output.
 
-The generated residual CSV can be loaded directly by `ml.kan.dataset`:
+The generated residual CSV can be loaded directly by `ml.pinn.dataset`:
 
 ```python
-from ml.kan.dataset import load_residual_table, build_xy
+from ml.pinn.dataset import load_residual_table, build_xy
 df = load_residual_table("residuals.csv")
 X, Y = build_xy(df, feature_cols="t,drx,dry,drz", target_cols="dvx,dvy,dvz")
 ```
@@ -42,6 +42,13 @@ X, Y = build_xy(df, feature_cols="t,drx,dry,drz", target_cols="dvx,dvy,dvz")
 cargo run -p posebuilder --example pose_pipeline -- \
   ref.csv jobs/demo --job-id demo --mode forward_dynamics \
   --t0 0 --t1 5 --fps 24 --frames 120 --scale-k 1000 --pointing earth
+
+# Third-person observer camera: park the camera at an external vantage point
+# (km, from the Earth-Moon barycenter) and point it at the spacecraft.
+cargo run -p posebuilder --example pose_pipeline -- \
+  ref.csv jobs/demo_obs --job-id demo_obs --mode forward_dynamics \
+  --t0 0 --t1 5 --fps 24 --frames 120 --scale-k 1000 \
+  --pointing observer --observer-offset 1e6,0,0
 
 python scripts/mock_cosmos_worker.py jobs/demo
 ```

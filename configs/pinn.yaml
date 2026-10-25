@@ -4,4 +4,4 @@ engineer: true
 test_fraction: 0.2
 epochs: 50
 lr: 0.2
-out: ml/kan/kan_result.json
+out: ml/pinn/pinn_result.json

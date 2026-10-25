@@ -1,10 +1,10 @@
-"""Pydantic-verified configuration loaded from YAML for the KAN pipeline.
+"""Pydantic-verified configuration loaded from YAML for the PINN pipeline.
 
 Usage:
-    from ml.kan.config import PipelineConfig
-    cfg = PipelineConfig.from_yaml("configs/kan.yaml")
+    from ml.pinn.config import PipelineConfig
+    cfg = PipelineConfig.from_yaml("configs/pinn.yaml")
     # or with overrides:
-    cfg = PipelineConfig.from_yaml("configs/kan.yaml", overrides={"epochs": 200})
+    cfg = PipelineConfig.from_yaml("configs/pinn.yaml", overrides={"epochs": 200})
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class PipelineConfig(BaseModel):
     epochs: int = Field(default=150, ge=1)
     lr: float = Field(default=5e-2, gt=0.0)
     engineer: bool = False
-    out: str = "ml/kan/kan_result.json"
+    out: str = "ml/pinn/pinn_result.json"
 
     @field_validator("test_fraction")
     @classmethod
