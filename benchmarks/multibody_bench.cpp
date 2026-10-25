@@ -418,4 +418,62 @@ BENCHMARK(BM_PropagateKernelFull)
     ->Unit(benchmark::kMillisecond)
     ->UseManualTime();
 
+// Aggregate statistics over a resident device buffer.  This isolates the
+// cost of the tiled reduction from allocation and host/device traffic.
+void BM_EnsembleStats(benchmark::State& state) {
+    const int bodies = static_cast<int>(state.range(0));
+    const std::vector<MbsState> host = initial_states(bodies, WorkloadConfig{});
+
+    MbsState* device_states = nullptr;
+    MbsEnsembleStats* device_stats = nullptr;
+    if (cudaMalloc(reinterpret_cast<void**>(&device_states),
+                   host.size() * sizeof(MbsState)) != cudaSuccess ||
+        cudaMalloc(reinterpret_cast<void**>(&device_stats), sizeof(MbsEnsembleStats)) != cudaSuccess) {
+        state.SkipWithError("cudaMalloc failed");
+        return;
+    }
+    if (cudaMemcpy(device_states, host.data(), host.size() * sizeof(MbsState),
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
+        cudaFree(device_stats);
+        cudaFree(device_states);
+        state.SkipWithError("cudaMemcpy failed");
+        return;
+    }
+
+    GpuTimer timer;
+    if (!timer.ok()) {
+        cudaFree(device_stats);
+        cudaFree(device_states);
+        state.SkipWithError("cudaEventCreate failed");
+        return;
+    }
+
+    double total_ms = 0.0;
+    for (auto _ : state) {
+        MBS_CUDA_CHECK_OR_SKIP(state, timer.begin(), "event record failed");
+        const int rc = mbs_ensemble_stats_device(device_states, bodies, device_stats);
+        float ms = 0.0f;
+        MBS_CUDA_CHECK_OR_SKIP(state, timer.end_ms(&ms), "event elapsed failed");
+        MBS_CUDA_CHECK_OR_SKIP(state, rc, "ensemble stats launch failed");
+        MBS_CUDA_LAST_ERROR_OR_SKIP(state, "ensemble stats execution failed");
+        state.SetIterationTime(static_cast<double>(ms) / 1.0e3);
+        total_ms += static_cast<double>(ms);
+    }
+
+    cudaFree(device_stats);
+    cudaFree(device_states);
+
+    state.counters["bodies"] = static_cast<double>(bodies);
+    state.counters["gpu_ms_per_call"] =
+        state.iterations() > 0 ? total_ms / static_cast<double>(state.iterations()) : 0.0;
+    state.SetItemsProcessed(static_cast<std::int64_t>(state.iterations()) * bodies);
+}
+
+BENCHMARK(BM_EnsembleStats)
+    ->Arg(1000)
+    ->Arg(10000)
+    ->Arg(100000)
+    ->Unit(benchmark::kMillisecond)
+    ->UseManualTime();
+
 BENCHMARK_MAIN();

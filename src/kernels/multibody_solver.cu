@@ -7,6 +7,7 @@
 
 #include "multibody_solver.cuh"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 
@@ -236,6 +237,145 @@ int mbs_propagate_device(MbsState* device_states, int num_bodies, int num_steps,
     // Drop any sticky error left by the caller so it is not attributed here.
     cudaGetLastError();
     multibody_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states, num_bodies, num_steps, *config, device_trajectory);
+    return static_cast<int>(cudaGetLastError());
+}
+
+namespace {
+
+constexpr int MBS_ENSEMBLE_TILE_SIZE = 256;
+
+__device__ void atomic_min_double(double* address, double value) {
+    unsigned long long* address_as_ull = reinterpret_cast<unsigned long long*>(address);
+    unsigned long long old = *address_as_ull;
+    while (value < __longlong_as_double(old)) {
+        unsigned long long assumed = old;
+        unsigned long long result = atomicCAS(address_as_ull, assumed, __double_as_longlong(value));
+        if (result == assumed) {
+            break;
+        }
+        old = result;
+    }
+}
+
+__device__ void atomic_max_double(double* address, double value) {
+    unsigned long long* address_as_ull = reinterpret_cast<unsigned long long*>(address);
+    unsigned long long old = *address_as_ull;
+    while (value > __longlong_as_double(old)) {
+        unsigned long long assumed = old;
+        unsigned long long result = atomicCAS(address_as_ull, assumed, __double_as_longlong(value));
+        if (result == assumed) {
+            break;
+        }
+        old = result;
+    }
+}
+
+// One block cooperatively loads a tile of particles into shared memory, then
+// each thread accumulates the contribution of its assigned particle.  The
+// tile keeps the global loads coalesced and gives the reduction a bounded
+// working set; atomics combine the per-block partial results.
+__global__ void ensemble_stats_kernel(const MbsState* states, int num_bodies, MbsEnsembleStats* stats) {
+    __shared__ MbsState tile[MBS_ENSEMBLE_TILE_SIZE];
+
+    const int tid = threadIdx.x;
+    double sx = 0.0;
+    double sy = 0.0;
+    double sz = 0.0;
+    double svx = 0.0;
+    double svy = 0.0;
+    double svz = 0.0;
+    double sr2 = 0.0;
+    double sv2 = 0.0;
+    double min_r2 = 0.0;
+    double max_r2 = 0.0;
+    bool has_particle = false;
+
+    for (int tile_start = 0; tile_start < num_bodies; tile_start += MBS_ENSEMBLE_TILE_SIZE) {
+        const int index = tile_start + tid;
+        if (index < num_bodies) {
+            tile[tid] = states[index];
+        }
+        __syncthreads();
+
+        const int tile_count = std::min(MBS_ENSEMBLE_TILE_SIZE, num_bodies - tile_start);
+        if (tid < tile_count) {
+            const MbsState state = tile[tid];
+            const double r2 = state.r.x * state.r.x + state.r.y * state.r.y + state.r.z * state.r.z;
+            const double v2 = state.v.x * state.v.x + state.v.y * state.v.y + state.v.z * state.v.z;
+
+            sx += state.r.x;
+            sy += state.r.y;
+            sz += state.r.z;
+            svx += state.v.x;
+            svy += state.v.y;
+            svz += state.v.z;
+            sr2 += r2;
+            sv2 += v2;
+
+            if (!has_particle) {
+                min_r2 = r2;
+                max_r2 = r2;
+                has_particle = true;
+            } else {
+                min_r2 = (r2 < min_r2) ? r2 : min_r2;
+                max_r2 = (r2 > max_r2) ? r2 : max_r2;
+            }
+        }
+        __syncthreads();
+    }
+
+    if (has_particle) {
+        atomicAdd(&stats->sum_x, sx);
+        atomicAdd(&stats->sum_y, sy);
+        atomicAdd(&stats->sum_z, sz);
+        atomicAdd(&stats->sum_vx, svx);
+        atomicAdd(&stats->sum_vy, svy);
+        atomicAdd(&stats->sum_vz, svz);
+        atomicAdd(&stats->sum_r2, sr2);
+        atomicAdd(&stats->sum_v2, sv2);
+        atomicAdd(&stats->count, 1);
+        atomic_min_double(&stats->min_r2, min_r2);
+        atomic_max_double(&stats->max_r2, max_r2);
+    }
+}
+
+}  // namespace
+
+int mbs_ensemble_stats(const MbsState* states, int num_bodies, MbsEnsembleStats* stats) {
+    if (states == nullptr || stats == nullptr || num_bodies <= 0) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+
+    MbsEnsembleStats initial{};
+    initial.min_r2 = std::numeric_limits<double>::infinity();
+    initial.max_r2 = -std::numeric_limits<double>::infinity();
+
+    DeviceArray<MbsEnsembleStats> device_stats;
+    MBS_CUDA_CHECK(device_stats.allocate(1));
+    MBS_CUDA_CHECK(cudaMemcpy(device_stats.data, &initial, sizeof(MbsEnsembleStats), cudaMemcpyHostToDevice));
+
+    const int blocks = MBS_BLOCKS_FOR(num_bodies);
+    ensemble_stats_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(states, num_bodies, device_stats.data);
+    MBS_CUDA_CHECK(cudaGetLastError());
+    MBS_CUDA_CHECK(cudaStreamSynchronize(0));
+    MBS_CUDA_CHECK(cudaMemcpy(stats, device_stats.data, sizeof(MbsEnsembleStats), cudaMemcpyDeviceToHost));
+
+    return static_cast<int>(cudaSuccess);
+}
+
+int mbs_ensemble_stats_device(const MbsState* device_states, int num_bodies, MbsEnsembleStats* device_stats) {
+    if (device_states == nullptr || device_stats == nullptr || num_bodies <= 0) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+
+    MbsEnsembleStats initial{};
+    initial.min_r2 = std::numeric_limits<double>::infinity();
+    initial.max_r2 = -std::numeric_limits<double>::infinity();
+    MBS_CUDA_CHECK(cudaMemcpy(device_stats, &initial, sizeof(MbsEnsembleStats), cudaMemcpyHostToDevice));
+
+    cudaGetLastError();
+    const int blocks = MBS_BLOCKS_FOR(num_bodies);
+    ensemble_stats_kernel<<<blocks, MBS_THREADS_PER_BLOCK>>>(device_states, num_bodies, device_stats);
     return static_cast<int>(cudaGetLastError());
 }
 

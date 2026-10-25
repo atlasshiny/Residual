@@ -9,6 +9,7 @@ The project implements the restricted Earth-Moon multibody problem with a symple
 ### Key Technical Features
 
 - **CUDA-Accelerated Propagator**: A custom C++/CUDA kernel with a grid-stride loop for scalability across particles and GPU architectures.
+- **Tiled Ensemble Statistics**: A shared-memory tiled CUDA reduction that computes centroid, RMS radius, mean speed, and extrema for Monte Carlo particle clouds.
 - **Symplectic + Adaptive Integration**: Velocity-Verlet (kick-drift-kick) in both CUDA and Rust, plus an adaptive Dormand–Prince RK45 propagator in the Rust core.
 - **High-Fidelity Physics**: J2 perturbation with configurable spin axis, gravitational softening for close encounters, and impulsive burn support.
 - **Rust Validation Core**: A type-safe workspace (`dynamics`, `ingest`, `frames`, `residual`, `schema`, `ipc`, `posebuilder`, `evaluator`) that keeps the CPU reference aligned with the GPU implementation and owns the Cosmos job/pose contracts.

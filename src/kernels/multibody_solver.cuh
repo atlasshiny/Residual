@@ -234,4 +234,32 @@ int mbs_propagate(const MbsState* initial_states, int num_bodies, int num_steps,
 // Validate the launch result before reading the buffers.
 int mbs_propagate_device(MbsState* device_states, int num_bodies, int num_steps, const MbsConfig* config, MbsState* device_trajectory);
 
+// Aggregate statistics for a device/host array of particle states.
+//
+// The result contains sums, squared-norm sums, and min/max squared radius so
+// callers can derive the centroid, RMS radius, mean speed, and extrema without
+// a second pass.  min_r2/max_r2 are only meaningful when count > 0.
+struct MbsEnsembleStats {
+    int count;
+    double sum_x;
+    double sum_y;
+    double sum_z;
+    double sum_vx;
+    double sum_vy;
+    double sum_vz;
+    double sum_r2;
+    double sum_v2;
+    double min_r2;
+    double max_r2;
+};
+
+// Host version: validates inputs, allocates a device result, launches the
+// tiled reduction, synchronises, and copies the result back to *stats.
+int mbs_ensemble_stats(const MbsState* states, int num_bodies, MbsEnsembleStats* stats);
+
+// Device-resident version: writes into device_stats and returns without
+// synchronising.  The stats buffer must be device memory and is reset by the
+// call.  Validate the launch result before reading it.
+int mbs_ensemble_stats_device(const MbsState* device_states, int num_bodies, MbsEnsembleStats* device_stats);
+
 }  // extern "C"
