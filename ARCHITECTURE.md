@@ -106,7 +106,7 @@ Python, reference PyTorch path first `[paper]` (§5.3.1: reference implementatio
 
 ### 4.4 UI (`ui/`)
 
-Tauri + Three.js. Shows predicted vs actual path, the symbolic equation, error plots, a Sun-direction marker driven by the reference Sun track (distance compressed to fit the lunar scene), and plays pre-rendered Cosmos clips. It never waits on live generation.
+Tauri + Three.js. Shows predicted vs actual path, the symbolic equation, error plots, and a guide-styled trajectory view: a dimmed full reference path with a bright growing traveled trail (tube + crisp line core), exaggerated Earth/Moon markers and labels, a deterministic starfield, a compressed Sun marker with sight line labeled "not to scale", and a static "Top view" that frames the arc face-on down the orbit normal. A scene caption notes bodies/Sun are enlarged and not to scale. The Cosmos job frame viewer was removed from the UI; the UI only renders the orbit trajectory.
 
 ## 5. Residual and PINN contract
 
