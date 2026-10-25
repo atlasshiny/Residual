@@ -303,10 +303,14 @@ def main(argv: list[str] | None = None) -> int:
     frame.to_csv(out_path, index=False, float_format="%.12g")
 
     meta_path = out_path.with_suffix(".meta.json")
+    target_names = {
+        "301": "Moon", "10": "Sun", "-85": "Lunar Reconnaissance Orbiter",
+        "-1023": "Artemis I Orion", "-1024": "Artemis II Orion",
+    }
     meta = {
         "source": "JPL Horizons API",
         "api_url": url,
-        "target": f"{args.target} (Moon)",
+        "target": f"{args.target} ({target_names.get(str(args.target), 'Horizons target')})",
         "center": f"{args.center} (Earth body centre)",
         "query": {key: value.strip("'") for key, value in query.items()},
         "start_tdb": args.start,

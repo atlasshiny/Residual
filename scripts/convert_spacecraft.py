@@ -12,6 +12,7 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 MU_EARTH = 3.986004418e14
@@ -40,6 +41,10 @@ def convert(spacecraft_csv, moon_csv, out_csv, preserve_distance=False):
     for c in ("x", "y", "z", "vx", "vy", "vz"):
         sc[c] = sc[c] * 1000.0
         moon[c] = moon[c] * 1000.0
+    sc = sc.sort_values("t").reset_index(drop=True)
+    moon = moon.sort_values("t").reset_index(drop=True)
+    if moon["t"].iloc[0] > sc["t"].iloc[0] or moon["t"].iloc[-1] < sc["t"].iloc[-1]:
+        raise ValueError("Moon ephemeris must cover the full spacecraft time span")
 
     # Alignment: epoch Earth->Moon vector.
     d0 = (moon["x"].iloc[0], moon["y"].iloc[0], moon["z"].iloc[0])
@@ -66,31 +71,37 @@ def convert(spacecraft_csv, moon_csv, out_csv, preserve_distance=False):
             R[2][0] * vx + R[2][1] * vy + R[2][2] * vz,
         )
 
-    # Barycentric split using nominal or instantaneous separation.
+    # Interpolate the Moon state at each spacecraft timestamp. The Moon and
+    # spacecraft Horizons queries may use different cadences.
+    moon_state = {
+        col: np.interp(sc["t"], moon["t"], moon[col])
+        for col in ("x", "y", "z", "vx", "vy", "vz")
+    }
+
+    # Barycentric split using the full, time-varying Earth-to-Moon vector.
     rows = []
-    for _, r in sc.iterrows():
-        # Find nearest moon sample by time for separation (or use nominal).
-        if preserve_distance:
-            # match by index assuming same cadence; fallback nominal
-            idx = min(int(r["t"] / 600.0), len(moon) - 1)
-            D = _norm((moon["x"].iloc[idx], moon["y"].iloc[idx], moon["z"].iloc[idx]))
-            if D <= 0:
-                D = EARTH_MOON_DISTANCE
-        else:
-            D = EARTH_MOON_DISTANCE
-        # Earth position in barycentric frame (rotated) = -D * mu_moon/total_mu along xhat
-        earth_offset = -D * MU_MOON / TOTAL_MU
-        # Apply rotation to spacecraft geocentric vector, then shift by earth offset.
+    for i, (_, r) in enumerate(sc.iterrows()):
+        moon_r = tuple(moon_state[c][i] for c in ("x", "y", "z"))
+        moon_v = tuple(moon_state[c][i] for c in ("vx", "vy", "vz"))
+        if not preserve_distance:
+            separation = _norm(moon_r)
+            factor = EARTH_MOON_DISTANCE / separation
+            moon_r = tuple(value * factor for value in moon_r)
+            moon_v = tuple(value * factor for value in moon_v)
+        earth_offset = tuple(-MU_MOON / TOTAL_MU * value for value in rotate_vec(*moon_r))
+        earth_velocity = tuple(-MU_MOON / TOTAL_MU * value for value in rotate_vec(*moon_v))
+        # Rotate the Earth-centred spacecraft state and add the actual
+        # barycentric Earth position and velocity at this epoch.
         rx, ry, rz = rotate_vec(r["x"], r["y"], r["z"])
         vx, vy, vz = rotate_vec(r["vx"], r["vy"], r["vz"])
         rows.append({
             "t": r["t"],
-            "x": rx + earth_offset,
-            "y": ry,
-            "z": rz,
-            "vx": vx,
-            "vy": vy,
-            "vz": vz,
+            "x": rx + earth_offset[0],
+            "y": ry + earth_offset[1],
+            "z": rz + earth_offset[2],
+            "vx": vx + earth_velocity[0],
+            "vy": vy + earth_velocity[1],
+            "vz": vz + earth_velocity[2],
         })
 
     out = pd.DataFrame(rows, columns=["t", "x", "y", "z", "vx", "vy", "vz"])

@@ -7,6 +7,11 @@ if(SKIP_CUDA_TESTS)
     # This prevents CMake from failing when nvcc is not found.
 else()
     # Re-enable CUDA if not skipping
+
+    find_package(CUDAToolkit QUIET)
+
+    set(CMAKE_CUDA_ARCHITECTURES native)
+
     enable_language(CUDA)
 endif()
 

@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench bench-build bench-quick bench-json bench-list bench-kernel bench-api bench-transfer bench-physics bench-trajectory bench-burns bench-timestep backend-build bench-backends clean ui-data ensemble-data
+.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench clean ui-data ensemble-data
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -63,6 +63,58 @@ fetch-sun:
 	uv run --extra data python scripts/fetch_horizons.py \
 	  --target 10 --start "$(SPICE_START)" $(if $(SPICE_STOP),--stop "$(SPICE_STOP)",) \
 	  --step $(SPICE_STEP) --out data/raw_sun.csv $(HORIZONS_ARGS)
+
+# Fetch LRO over the Artemis II interval and convert it into the solver's
+# barycentric frame using the matching Moon arc. This is transfer-study data;
+# it does not change the production PINN or Artemis viewer outputs.
+LRO_START ?= 2026-04-02 02:00
+LRO_STOP ?= 2026-04-10 23:54
+LRO_STEP ?= 10m
+fetch-lro-transfer:
+	uv run --extra data python scripts/fetch_horizons.py \
+	  --target -85 --start "$(LRO_START)" --stop "$(LRO_STOP)" \
+	  --step $(LRO_STEP) --out data/raw_lro_artemis2_window.csv $(HORIZONS_ARGS)
+	uv run --extra data python scripts/convert_spacecraft.py \
+	  data/raw_lro_artemis2_window.csv data/raw_moon_artemis2.csv \
+	  data/reference_lro_artemis2_window_preserve.csv --preserve-distance
+
+# Reproducible synthetic finite-burn/mass-flow trajectories for transfer-model
+# research. Artemis I/II remain held-out external validation cases.
+SYNTHETIC_ARGS ?=
+synthetic-rocket-data:
+	uv run --extra data python scripts/generate_synthetic_rocket_data.py $(SYNTHETIC_ARGS)
+
+MOON_TRAIN_START ?= 2025-01-01
+MOON_TRAIN_STOP ?= 2025-01-31
+MOON_TRAIN_STEP ?= 10m
+fetch-moon-training-data:
+	uv run --extra data python scripts/fetch_horizons.py --target 301 \
+	  --start "$(MOON_TRAIN_START)" --stop "$(MOON_TRAIN_STOP)" \
+	  --step $(MOON_TRAIN_STEP) --out data/raw_moon_training.csv
+	uv run --extra data python scripts/fetch_horizons.py --target 10 \
+	  --start "$(MOON_TRAIN_START)" --stop "$(MOON_TRAIN_STOP)" \
+	  --step $(MOON_TRAIN_STEP) --out data/raw_sun_moon_training.csv
+	uv run --extra data python scripts/convert_reference.py \
+	  --raw data/raw_moon_training.csv --out data/reference_moon_training.csv \
+	  --manifest data/reference_moon_training.manifest.json --preserve-distance \
+	  --sun-raw data/raw_sun_moon_training.csv --sun-out data/reference_sun_moon_training.csv
+	uv run --extra data python scripts/build_ephemeris_accel_residuals.py \
+	  --target moon --reference data/reference_moon_training.csv \
+	  --sun data/reference_sun_moon_training.csv --out data/moon_training_accel_residuals.csv
+
+# Train a new dynamics-residual model in a separate directory. This does not
+# read or overwrite the existing PINN / Artemis checkpoints.
+SYNTHETIC_TRAIN_ARGS ?= --moon-data data/moon_training_accel_residuals.csv
+train-synthetic-dynamics:
+	uv run --extra data --extra gpu python scripts/train_synthetic_dynamics.py $(SYNTHETIC_TRAIN_ARGS)
+
+# External evaluation only; these Artemis arcs are never used in training.
+ARTEMIS_EVAL_ARGS ?= --data data/artemis1_moon_accel_test.csv data/artemis2_moon_accel_test.csv data/artemis2_orion_accel_diagnostic.csv
+evaluate-artemis-transfer:
+	uv run --extra data --extra gpu python scripts/evaluate_state_acceleration_model.py $(ARTEMIS_EVAL_ARGS)
+
+evaluate-synthetic-rollout:
+	uv run --extra data --extra gpu python scripts/evaluate_synthetic_rollout.py
 
 # Reference trajectory -> residual table (dr, dv per sample).
 # Uses the circular Earth-Moon ephemeris, matching the CUDA kernel.

@@ -123,6 +123,43 @@ Current limitations: the propagator uses the analytic circular Earth–Moon ephe
 
 The correction models currently train on one 30-day Moon arc and report a random-split R², which measures interpolation rather than transfer. [`docs/generalization-plan.md`](docs/generalization-plan.md) lays out the path to a genuinely generalized model: temporal and mission-level holdouts, state-based features instead of time, acceleration-residual targets, multi-arc training data, uncertainty/OOD gating, and a benchmark suite. It also lists the P0 work that should be done before quoting any model as "generalized."
 
+### Transfer trajectory data
+
+The transfer study now has separate trajectory sources for the Artemis I and
+Artemis II Moon and Orion arcs, plus an LRO arc over the Artemis II window.
+LRO adds a different spacecraft trajectory near the Moon, which helps test
+whether a correction generalizes across vehicle dynamics and orbital states.
+It does not by itself teach the model realistic rocket forces: the Moon/Orion
+arcs are still a small and highly correlated set, and transfer claims need
+whole-trajectory holdouts. Fetch or refresh the LRO reference with
+`make fetch-lro-transfer`; the default window is 2026-04-02 through
+2026-04-10. The source is JPL Horizons target `-85` (LRO). These files are
+inputs for a separate experiment and must not replace the Artemis-specific
+model weights or viewer predictions.
+
+Generate a reproducible synthetic cislunar rocket dataset with
+`make synthetic-rocket-data`. The default run creates 12 four-day arcs with
+finite thrust burns, rocket-equation propellant mass flow, Earth J2, and solar
+radiation pressure. Rows pair the state and vehicle/control inputs with a
+truth-minus-baseline acceleration label. The training model applies known
+thrust as `F/m` and learns the remaining J2/SRP residual from state and vehicle
+features. The CSV and a manifest containing
+arc-specific burn schedules are written under `data/`; override settings with
+`make synthetic-rocket-data SYNTHETIC_ARGS="--arcs 20 --seed 17"`. This is a
+separate research dataset. Artemis I/II stay outside synthetic training and
+serve as mission-level transfer tests. The existing time-input PINN cannot
+train on this table directly; it needs a separate state-conditioned
+acceleration-model trainer. Burn rows are sparse, so training uses arc-level
+splits and burn-weighted loss. Prepare a separate 2025 Moon/Sun residual arc
+with `make fetch-moon-training-data`; Artemis data is not part of this step.
+Then train with `make train-synthetic-dynamics`.
+Run the untouched Artemis arcs with `make evaluate-artemis-transfer`. Orion
+scores remain diagnostic until actual thrust and mass histories are available.
+`make evaluate-synthetic-rollout` compares corrected and physics-only free
+propagation on the held-out synthetic arcs. Training and evaluation artifacts
+write under `ml/pinn/synthetic_transfer/` and leave production checkpoints
+untouched.
+
 ### Make Targets
 
 | Target | Description |
