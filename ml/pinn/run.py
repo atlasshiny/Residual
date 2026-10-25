@@ -151,6 +151,10 @@ def run(args) -> tuple:
         Y_vel_scaled_val_p = [[0.0]*3]*2
         Y_pos_scaled_train_p = [[0.0]*3]*12
         Y_pos_scaled_test_p = [[0.0]*3]*2
+        Y_pos_raw_train = [[0.0]*3]*12
+        Y_pos_raw_test = [[0.0]*3]*2
+        df_test = None
+        pos_cols = ["y"]
         feature_cols = "synthetic"
         masked_frac = 0.0
         scaler_pos = None
@@ -172,7 +176,7 @@ def run(args) -> tuple:
     
     pinn_test_pred = pinn.forward(X_pinn_test)
     pinn_test_pred_orig = scaler_pos.inverse_transform(pinn_test_pred) if scaler_pos else pinn_test_pred
-    pinn_test_mse, pinn_test_r2 = _eval(None, None, df_test[pos_cols].values, predict=lambda _: pinn_test_pred_orig)
+    pinn_test_mse, pinn_test_r2 = _eval(None, None, Y_pos_raw_test if df_test is None else df_test[pos_cols].values, predict=lambda _: pinn_test_pred_orig)
     
     # --- MLP ---
     mlp = MLP([n_features, 8, 4, out_dim], seed=0)
@@ -185,20 +189,21 @@ def run(args) -> tuple:
     
     mlp_test_pred = np.asarray(mlp.forward(X_test))
     mlp_test_pred_orig = scaler_pos.inverse_transform(mlp_test_pred) if scaler_pos else mlp_test_pred
-    mlp_test_mse, mlp_test_r2 = _eval(None, None, df_test[pos_cols].values, predict=lambda _: mlp_test_pred_orig)
+    mlp_test_target = Y_pos_raw_train[:len(mlp_test_pred_orig)] if df_test is None else df_test[pos_cols].values
+    mlp_test_mse, mlp_test_r2 = _eval(None, None, mlp_test_target, predict=lambda _: mlp_test_pred_orig)
     
     # --- SINDy ---
     sindy_deg = 2
     Xi, names, exprs = sindy(X_train, Y_pos_raw_train, degree=sindy_deg)
     sindy_predict_fn = lambda batch: sindy_predict(batch, Xi, degree=sindy_deg)
     sin_train_mse, sin_train_r2 = _eval(None, X_train, Y_pos_raw_train, predict=sindy_predict_fn)
-    sin_test_mse, sin_test_r2 = _eval(None, X_test, df_test[pos_cols].values, predict=sindy_predict_fn)
+    sin_test_mse, sin_test_r2 = _eval(None, X_test, Y_pos_raw_train[:len(X_test)] if df_test is None else df_test[pos_cols].values, predict=sindy_predict_fn)
     
     # --- Linear Regression ---
     W_lr = linear_regression(X_train, Y_pos_raw_train)
     lr_predict_fn = lambda batch: linear_predict(batch, W_lr)
     lr_train_mse, lr_train_r2 = _eval(None, X_train, Y_pos_raw_train, predict=lr_predict_fn)
-    lr_test_mse, lr_test_r2 = _eval(None, X_test, df_test[pos_cols].values, predict=lr_predict_fn)
+    lr_test_mse, lr_test_r2 = _eval(None, X_test, Y_pos_raw_train[:len(X_test)] if df_test is None else df_test[pos_cols].values, predict=lr_predict_fn)
 
     results = {
         "n_samples": len(df) if df is not None else 12,

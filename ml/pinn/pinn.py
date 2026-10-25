@@ -7,6 +7,7 @@ except ImportError:
     HAS_TORCH = False
     nn = None
     optim = None
+import copy
 import math
 
 class PINN(nn.Module if HAS_TORCH else object):

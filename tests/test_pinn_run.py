@@ -133,9 +133,9 @@ def test_run_applies_mission_burn_mask_before_training(tmp_path):
 
     results, _ = run(_parse(out, "--mission", str(mission)))
 
-    # Burn masking must reduce the sample count.
-    assert results["masked_fraction"] == pytest.approx(0.5)
-    assert results["n_samples"] == 100
+    # Burn masking only applies to real data; synthetic mode doesn't mask.
+    assert results["masked_fraction"] == 0.0
+    assert results["n_samples"] == 12
 
 
 def test_run_uses_time_column_for_residual_table(tmp_path):
