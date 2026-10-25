@@ -123,7 +123,11 @@ pub enum KernelKind {
 impl KernelKind {
     /// Infer the kernel kind from a file extension (case-insensitive).
     pub fn from_extension(extension: &str) -> Option<Self> {
-        match extension.trim_start_matches('.').to_ascii_lowercase().as_str() {
+        match extension
+            .trim_start_matches('.')
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "bsp" => Some(Self::BinarySpk),
             "bpc" => Some(Self::BinaryPck),
             "tls" => Some(Self::LeapSeconds),
@@ -234,7 +238,8 @@ impl LeapSecondTable {
 }
 
 fn parse_tls(text: &str) -> Result<(Vec<LeapSecondEntry>, Option<f64>), String> {
-    let delta_t_a = find_scalar(text, "DELTET/DELTA_T_A").or_else(|| find_scalar(text, "DELTA_T_A"));
+    let delta_t_a =
+        find_scalar(text, "DELTET/DELTA_T_A").or_else(|| find_scalar(text, "DELTA_T_A"));
     let entries = parse_delta_at(text)?;
     Ok((entries, delta_t_a))
 }
@@ -528,11 +533,7 @@ fn circular_earth_moon_states(t: f64, config: &Config) -> (State, State) {
     };
     let moon = State {
         r: Vec3::new(d * (1.0 - f) * cos_t, d * (1.0 - f) * sin_t, 0.0),
-        v: Vec3::new(
-            -d * (1.0 - f) * n * sin_t,
-            d * (1.0 - f) * n * cos_t,
-            0.0,
-        ),
+        v: Vec3::new(-d * (1.0 - f) * n * sin_t, d * (1.0 - f) * n * cos_t, 0.0),
     };
     (earth, moon)
 }
@@ -641,9 +642,9 @@ impl AniseEphemeris {
                     kernel.path.display()
                 ))
             })?;
-            almanac = almanac.load(path_str).map_err(|e| {
-                SpiceError::Ephemeris(format!("{}: {e}", kernel.path.display()))
-            })?;
+            almanac = almanac
+                .load(path_str)
+                .map_err(|e| SpiceError::Ephemeris(format!("{}: {e}", kernel.path.display())))?;
             kernel_count += 1;
         }
         Ok(Self {
@@ -702,19 +703,10 @@ impl Ephemeris for AniseEphemeris {
 /// Errors raised while loading kernels or querying ephemerides.
 #[derive(Debug)]
 pub enum SpiceError {
-    Io {
-        path: String,
-        err: String,
-    },
-    UnsupportedExtension {
-        path: String,
-        extension: String,
-    },
+    Io { path: String, err: String },
+    UnsupportedExtension { path: String, extension: String },
     UnknownBody(Body),
-    Parse {
-        path: String,
-        msg: String,
-    },
+    Parse { path: String, msg: String },
     Ephemeris(String),
 }
 
@@ -731,10 +723,9 @@ impl fmt::Display for SpiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SpiceError::Io { path, err } => write!(f, "io error for {path}: {err}"),
-            SpiceError::UnsupportedExtension { path, extension } => write!(
-                f,
-                "unsupported kernel extension '{extension}' for {path}"
-            ),
+            SpiceError::UnsupportedExtension { path, extension } => {
+                write!(f, "unsupported kernel extension '{extension}' for {path}")
+            }
             SpiceError::UnknownBody(body) => write!(f, "no ephemeris for {body}"),
             SpiceError::Parse { path, msg } => write!(f, "failed to parse {path}: {msg}"),
             SpiceError::Ephemeris(msg) => write!(f, "ephemeris query failed: {msg}"),
@@ -789,7 +780,10 @@ KPL/LSK
             KernelKind::from_extension(".tls"),
             Some(KernelKind::LeapSeconds)
         );
-        assert_eq!(KernelKind::from_extension("pca"), Some(KernelKind::AniseKernel));
+        assert_eq!(
+            KernelKind::from_extension("pca"),
+            Some(KernelKind::AniseKernel)
+        );
         assert_eq!(KernelKind::from_extension("txt"), None);
         assert!(KernelKind::BinarySpk.is_ephemeris());
         assert!(!KernelKind::LeapSeconds.is_ephemeris());
@@ -798,10 +792,7 @@ KPL/LSK
     #[test]
     fn rejects_unknown_extension() {
         let err = KernelPath::new("/tmp/de440.txt").unwrap_err();
-        assert!(matches!(
-            err,
-            SpiceError::UnsupportedExtension { .. }
-        ));
+        assert!(matches!(err, SpiceError::UnsupportedExtension { .. }));
     }
 
     #[test]
@@ -832,7 +823,10 @@ KPL/LSK
 
         let set = KernelSet::load([&path]).unwrap();
         assert_eq!(set.len(), 1);
-        assert_eq!(set.leap_seconds().unwrap().latest_tai_minus_utc(), Some(37.0));
+        assert_eq!(
+            set.leap_seconds().unwrap().latest_tai_minus_utc(),
+            Some(37.0)
+        );
         assert_eq!(set.mock_provider().kernel_count(), 1);
     }
 
@@ -892,7 +886,9 @@ KPL/LSK
     #[test]
     fn epochs_must_be_finite() {
         let eph = MockEphemeris::new();
-        assert!(eph.state_relative(Body::Moon, Body::Earth, f64::NAN).is_err());
+        assert!(eph
+            .state_relative(Body::Moon, Body::Earth, f64::NAN)
+            .is_err());
     }
 
     #[test]

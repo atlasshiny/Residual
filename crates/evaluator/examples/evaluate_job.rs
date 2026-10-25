@@ -75,7 +75,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn run(args: &Args) -> Result<MetricsReport, Box<dyn Error>> {
     let sample_path = args.sample_path();
     let outputs = SampleOutputs::load(&sample_path).map_err(|e| {
-        format!("cannot read recovered outputs {}: {e}", sample_path.display())
+        format!(
+            "cannot read recovered outputs {}: {e}",
+            sample_path.display()
+        )
     })?;
     if !outputs.has_poses() {
         return Err(format!(
@@ -91,11 +94,15 @@ fn run(args: &Args) -> Result<MetricsReport, Box<dyn Error>> {
     }
 
     // job.json is optional: needed only when it supplies the reference.
-    let job_path = args.job_json.clone().unwrap_or_else(|| args.job_dir.join("job.json"));
+    let job_path = args
+        .job_json
+        .clone()
+        .unwrap_or_else(|| args.job_dir.join("job.json"));
     let job: Option<JobManifest> = if job_path.is_file() {
-        Some(JobManifest::load(&job_path).map_err(|e| {
-            format!("cannot read job manifest {}: {e}", job_path.display())
-        })?)
+        Some(
+            JobManifest::load(&job_path)
+                .map_err(|e| format!("cannot read job manifest {}: {e}", job_path.display()))?,
+        )
     } else {
         None
     };

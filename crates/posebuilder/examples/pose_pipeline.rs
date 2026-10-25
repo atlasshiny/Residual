@@ -556,9 +556,7 @@ fn parse_f64(name: &str, value: &str) -> Result<f64, String> {
 }
 
 fn parse_resolution(value: &str) -> Result<[u32; 2], String> {
-    let parts: Vec<&str> = value
-        .split(|c| ['x', 'X', ',', ':'].contains(&c))
-        .collect();
+    let parts: Vec<&str> = value.split(|c| ['x', 'X', ',', ':'].contains(&c)).collect();
     if parts.len() != 2 {
         return Err(format!(
             "--resolution must be WxH (for example 704x1280), got '{value}'"

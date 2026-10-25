@@ -1013,7 +1013,9 @@ pub fn validate_rows(rows: &[Vec<f64>], label: &str) -> Result<Vec<[f64; 9]>, Ev
         let mut action = [0.0; 9];
         for (j, value) in row.iter().enumerate() {
             if !value.is_finite() {
-                return Err(EvalError::Invalid(format!("{label}[{i}][{j}] is not finite")));
+                return Err(EvalError::Invalid(format!(
+                    "{label}[{i}][{j}] is not finite"
+                )));
             }
             action[j] = *value;
         }
@@ -1265,11 +1267,7 @@ impl AlignmentReport {
         Self {
             scale: sim.scale,
             rotation: sim.rotation,
-            translation: [
-                sim.translation.x,
-                sim.translation.y,
-                sim.translation.z,
-            ],
+            translation: [sim.translation.x, sim.translation.y, sim.translation.z],
         }
     }
 }
@@ -1319,7 +1317,14 @@ pub fn report_for(
         .and_then(|j| j.first_pose.as_ref())
         .map(|pose| pose.to_pose());
     let recovered = outputs.sequence(fallback_first)?;
-    build_report(outputs, job, &recovered, reference, reference_label, source_label)
+    build_report(
+        outputs,
+        job,
+        &recovered,
+        reference,
+        reference_label,
+        source_label,
+    )
 }
 
 /// Like [`report_for`] but with a pre-built recovered [`Sequence`].
@@ -1410,10 +1415,7 @@ pub fn metrics_json(report: &MetricsReport) -> Result<String, EvalError> {
 
 /// Write a report to `path` (pretty JSON).
 #[cfg(feature = "serde")]
-pub fn write_metrics(
-    path: impl AsRef<Path>,
-    report: &MetricsReport,
-) -> Result<(), EvalError> {
+pub fn write_metrics(path: impl AsRef<Path>, report: &MetricsReport) -> Result<(), EvalError> {
     let path = path.as_ref();
     let text = metrics_json(report)?;
     fs::write(path, text).map_err(|e| EvalError::Io(path.display().to_string(), e.to_string()))
@@ -1484,10 +1486,7 @@ mod io_tests {
     #[test]
     fn empty_poses_is_rejected() {
         let outputs = SampleOutputs::from_json(r#"{"poses": []}"#).unwrap();
-        assert!(matches!(
-            outputs.sequence(None),
-            Err(EvalError::Missing(_))
-        ));
+        assert!(matches!(outputs.sequence(None), Err(EvalError::Missing(_))));
     }
 
     #[test]

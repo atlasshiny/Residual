@@ -61,7 +61,7 @@ impl Vec3 {
         Self { x, y, z }
     }
 
-#[allow(clippy::should_implement_trait)]
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, other: Self) -> Self {
         Self {
             x: self.x + other.x,
@@ -70,7 +70,7 @@ impl Vec3 {
         }
     }
 
-#[allow(clippy::should_implement_trait)]
+    #[allow(clippy::should_implement_trait)]
     pub fn sub(self, other: Self) -> Self {
         Self {
             x: self.x - other.x,
@@ -373,7 +373,14 @@ fn relative_error(old: &State, new: &State, dr: Vec3, dv: Vec3) -> f64 {
 /// `rtol` is the tolerance stored on the controller. The classic elementary
 /// controller `h_new = h * safety * (rtol / err)^(1/5)` is used, clamped to the
 /// configured growth/shrink limits.
-fn recommend_dt(dt: f64, err: f64, rtol: f64, safety: f64, min_factor: f64, max_factor: f64) -> f64 {
+fn recommend_dt(
+    dt: f64,
+    err: f64,
+    rtol: f64,
+    safety: f64,
+    min_factor: f64,
+    max_factor: f64,
+) -> f64 {
     if err.is_finite() && err > 0.0 {
         let factor = safety * (rtol / err).powf(0.2);
         dt * factor.clamp(min_factor, max_factor)
@@ -499,10 +506,7 @@ where
         .add(k6v.scale(dt * DP_B4_6))
         .add(k7v.scale(dt * DP_B4_7));
 
-    let new_state = State {
-        r: new_r,
-        v: new_v,
-    };
+    let new_state = State { r: new_r, v: new_v };
     let err = relative_error(&state, &new_state, new_r.sub(r4s), new_v.sub(v4s));
     (new_state, err)
 }
