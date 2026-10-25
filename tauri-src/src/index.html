@@ -75,7 +75,7 @@
             <label class="toggle"><input type="checkbox" id="show-ref" checked /><span>Reference</span></label>
             <label class="toggle"><input type="checkbox" id="show-prop" /><span>Propagated</span></label>
             <label class="toggle"><input type="checkbox" id="show-corr" /><span>PINN-corrected</span></label>
-            <label class="toggle"><input type="checkbox" id="show-ensemble" /><span>Ensemble</span></label>
+            <label class="toggle" title="Demo cloud: Earth-only two-body dispersion, not the n-body propagator"><input type="checkbox" id="show-ensemble" /><span>Ensemble</span></label>
           </div>
           <div class="playback-row">
             <button id="orbit-play" class="play-btn" type="button" aria-label="Play orbit">▶</button>
@@ -121,6 +121,8 @@
           <p class="status-text">Top-down view (Earth–Moon plane)</p>
           <canvas id="guide-canvas" width="320" height="240" aria-label="Guide map"></canvas>
         </section>
+
+        <section class="card" id="residual-card" data-mode-panel="orbit">
           <div class="card-head">
             <h2>Residual analysis</h2>
             <span class="status-dot" id="residual-dot"></span>

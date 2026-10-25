@@ -22,6 +22,7 @@ const stripMetrics = document.getElementById("strip-metrics");
 const autoRotateCb = document.getElementById("auto-rotate");
 const showGridCb = document.getElementById("show-grid");
 const showAxesCb = document.getElementById("show-axes");
+const residualCanvas = document.getElementById("residual-canvas");
 const guideCanvas = document.getElementById("guide-canvas");
 const residualStatus = document.getElementById("residual-status");
 const residualDot = document.getElementById("residual-dot");
@@ -52,13 +53,33 @@ const pipelineStatus = document.getElementById("pipeline-status");
 const pickFolderBtn = document.getElementById("pick-folder-btn");
 
 const tauri = window.__TAURI__ || null;
+const hasBackend = !!tauri?.core?.invoke;
 async function invokeCmd(name, args) {
-  if (!tauri?.core?.invoke) throw new Error("Tauri backend unavailable (running in browser?)");
+  if (!hasBackend) throw new Error("Tauri backend unavailable (running in browser?)");
   return tauri.core.invoke(name, args || {});
 }
 async function openFolderDialog() {
-  if (!tauri?.dialog?.open) return null;
-  return tauri.dialog.open({ directory: true, multiple: false });
+  try {
+    return await invokeCmd("pick_folder");
+  } catch {
+    return null;
+  }
+}
+function isLocalPath(p) {
+  return /^([a-zA-Z]:[\\/]|\/|\\\\)/.test(p);
+}
+async function loadJobFromPath(dir) {
+  const names = await invokeCmd("list_dir", { path: dir });
+  const files = [];
+  for (const name of names) {
+    if (!name.toLowerCase().endsWith(".json")) continue;
+    const text = await invokeCmd("read_text_file", {
+      path: `${dir.replace(/[\\/]+$/, "")}/${name}`,
+    });
+    files.push(new File([text], name, { type: "application/json" }));
+  }
+  if (!files.length) throw new Error(`no JSON files in ${dir}`);
+  return loadJobFromFiles(files);
 }
 
 // data globals
@@ -67,11 +88,14 @@ let manifestData = null;
 let uiManifestData = null;
 let residualTargetCols = [];
 let residualHoverIdx = -1;
+let residualChart = {};
 let orbitPlaying = false;
 let orbitAcc = 0;
 let orbitLastTick = null;
 let orbitMarker = null;
 let trajectoryData = null;
+let trajRadius = 0;
+let orbitPlane = null;
 const resetViewBtn = document.getElementById("reset-view");
 
 /* cosmos viewer */
@@ -102,7 +126,7 @@ const frameRenderLabel = document.getElementById("frame-render-label");
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x050816, 0.00002);
 
-const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100000);
+const camera = new THREE.PerspectiveCamera(55, 1, 1, 10000000);
 camera.position.set(0, 6000, 22000);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -189,6 +213,52 @@ controls.maxDistance = 80000;
 controls.autoRotate = autoRotateCb.checked;
 controls.autoRotateSpeed = 0.6;
 controls.target.set(0, 0, 0);
+
+/* The bundle is in kilometres and the arc spans ~384,400 km, so every
+   fixed-size prop in the scene has to scale with the loaded trajectory. */
+function applySceneScale(radius) {
+  const R = Math.max(radius || 1, 1);
+  const s = R / 20000;
+  grid.scale.setScalar(s);
+  axes.scale.setScalar(s);
+  if (scene.fog) scene.fog.density = 0.25 / R;
+  // GridHelper is built in the XZ plane; rotate it onto the orbital plane.
+  grid.rotation.set(0, 0, 0);
+  if (orbitPlane && orbitPlane.a === 0 && orbitPlane.b === 1) {
+    grid.rotation.x = Math.PI / 2;
+  } else if (orbitPlane && orbitPlane.a === 1 && orbitPlane.b === 2) {
+    grid.rotation.z = Math.PI / 2;
+  }
+}
+function fitCameraToTrajectory(radius) {
+  const R = Math.max(radius || trajRadius || 20000, 1);
+  trajRadius = R;
+  camera.near = Math.max(0.5, R * 0.00002);
+  camera.far = Math.max(camera.far, R * 20);
+  camera.updateProjectionMatrix();
+  controls.minDistance = R * 0.02;
+  controls.maxDistance = R * 20;
+  camera.position.set(R * 0.32, R * 1.0, R * 2.15);
+  controls.target.set(0, 0, 0);
+  controls.update();
+  applySceneScale(R);
+}
+function fitCameraToCosmos() {
+  // Poses were already rescaled into the scene by buildCosmosScene().
+  let R = EARTH_RADIUS * 1.5;
+  for (const p of cosmos.poses || []) {
+    const v = p.position;
+    if (v) R = Math.max(R, Math.hypot(v.x, v.y, v.z));
+  }
+  camera.near = Math.max(0.5, R * 0.00002);
+  camera.far = Math.max(camera.far, R * 20);
+  camera.updateProjectionMatrix();
+  controls.minDistance = R * 0.05;
+  controls.maxDistance = R * 20;
+  camera.position.set(R * 0.35, R * 1.0, R * 2.0);
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
 
 /* ---------------- helpers ---------------- */
 function showError(msg) {
@@ -293,6 +363,8 @@ async function loadTrajectory() {
     if (c.geometry) c.geometry.dispose();
     if (c.material) (Array.isArray(c.material) ? c.material : [c.material]).forEach((m) => m?.dispose?.());
   }
+  ensemblePoints = null;
+  orbitMarker = null;
   setDot(trajDot, "loading");
   try {
     const response = await fetch(src);
@@ -304,18 +376,35 @@ async function loadTrajectory() {
     if (points.length < 2) throw new Error("Not enough trajectory samples");
 
     // glowing tube along curve
-    let maxR = 0, minR = Infinity, maxY = 0;
+    let maxR = 0, minR = Infinity;
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
     for (const p of points) {
-      const r = Math.hypot(p.x, p.z);
+      const v = [p.x, p.y, p.z];
+      const r = Math.hypot(p.x, p.y, p.z);
       maxR = Math.max(maxR, r);
       minR = Math.min(minR, r);
-      maxY = Math.max(maxY, Math.abs(p.y));
+      for (let k = 0; k < 3; k++) {
+        lo[k] = Math.min(lo[k], v[k]);
+        hi[k] = Math.max(hi[k], v[k]);
+      }
     }
+    const spans = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    const order = [0, 1, 2].sort((a, b) => spans[b] - spans[a]);
+    const planar = spans[order[2]] <= Math.max(maxR, 1) * 0.02;
+    orbitPlane = {
+      a: order[0],
+      b: order[1],
+      c: order[2],
+      name: `${"XYZ"[order[0]]}–${"XYZ"[order[1]]}`,
+      planar,
+    };
     const closedLoop =
       points.length > 2 && points[0].distanceTo(points[points.length - 1]) <= maxR * 0.01;
     const curvePoints = closedLoop ? points.slice(0, -1) : points;
     const curve = new THREE.CatmullRomCurve3(curvePoints, closedLoop, "centripetal");
-    const tube = new THREE.TubeGeometry(curve, Math.max(points.length * 2, 64), 120, 12, false);
+    const tubeRadius = Math.max(20, maxR * 0.003);
+    const tube = new THREE.TubeGeometry(curve, Math.max(points.length * 2, 64), tubeRadius, 12, false);
     const tubeMat = new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
       emissive: 0xf59e0b,
@@ -338,7 +427,7 @@ async function loadTrajectory() {
 
     // head marker
     const head = new THREE.Mesh(
-      new THREE.SphereGeometry(220, 24, 24),
+      new THREE.SphereGeometry(Math.max(40, maxR * 0.012), 24, 24),
       new THREE.MeshBasicMaterial({ color: 0xffffff })
     );
     head.position.copy(points[points.length - 1]);
@@ -363,7 +452,7 @@ async function loadTrajectory() {
 
     // orbit playback marker
     orbitMarker = new THREE.Mesh(
-      new THREE.SphereGeometry(180, 20, 20),
+      new THREE.SphereGeometry(Math.max(36, maxR * 0.009), 20, 20),
       new THREE.MeshBasicMaterial({ color: 0x67e8f9 })
     );
     orbitMarker.position.copy(points[0]);
@@ -371,15 +460,21 @@ async function loadTrajectory() {
 
     // slider range
     if (orbitSlider) { orbitSlider.max = String(Math.max(points.length - 1, 1)); orbitSlider.value = "0"; }
+    if (orbitTimeEl) {
+      const t0 = Array.isArray(data.times) ? data.times[0] : 0;
+      orbitTimeEl.textContent = `t = ${Number(t0).toFixed(2)} s`;
+    }
 
     // metrics
     trajKv.innerHTML = "";
-    const flat = maxY <= maxR * 0.005;
     const kvPairs = [
       ["Samples", points.length],
       ["Max radius", fmt(maxR, 1)],
       ["Min radius", fmt(minR, 1)],
-      ["Plane", flat ? "XZ (y ≈ 0)" : "3D"],
+      [
+        "Plane",
+        planar ? `${orbitPlane.name} (${"XYZ"[order[2]]} ≈ 0)` : "3D",
+      ],
       ["Loop", closedLoop ? "Closed" : "Open"],
     ];
     for (const [k, v] of kvPairs) {
@@ -397,6 +492,7 @@ async function loadTrajectory() {
     stripMetrics.prepend(stripCard);
 
     trajectoryLoaded = true;
+    fitCameraToTrajectory(maxR);
     sceneStatus.textContent = (trajectoryLoaded && pinnLoaded) ? "Scene ready" : sceneStatus.textContent;
     drawGuide(0);
     settle();
@@ -519,7 +615,14 @@ async function loadEnsemble() {
 
 function renderEnsembleEpoch(idx) {
   if (ensemblePoints) { trajGroup.remove(ensemblePoints); ensemblePoints.geometry?.dispose(); ensemblePoints.material?.dispose(); ensemblePoints = null; }
-  if (!ensembleData || !showEnsembleCb?.checked) return;
+  if (!ensembleData) return;
+  // stats[i] describes the cloud after step i, i.e. epoch i+1.
+  const st = idx > 0 ? ensembleData.stats?.[idx - 1] : null;
+  const t = ensembleData.epochs_s?.[idx] ?? idx;
+  if (ensembleInfo) {
+    ensembleInfo.textContent = `epoch ${idx} · t=${Number(t).toFixed(0)}s · rms=${st ? (st.rms_m / 1000).toFixed(1) + " km" : "0.0 km"}`;
+  }
+  if (!showEnsembleCb?.checked) return;
   const cloud = ensembleData.clouds?.[idx];
   if (!Array.isArray(cloud)) return;
   const positions = new Float32Array(cloud.length * 3);
@@ -530,14 +633,15 @@ function renderEnsembleEpoch(idx) {
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const mat = new THREE.PointsMaterial({ color: 0xa78bfa, size: 4, transparent: true, opacity: 0.6, sizeAttenuation: true });
+  const mat = new THREE.PointsMaterial({
+    color: 0xa78bfa,
+    size: 2.5,
+    sizeAttenuation: false,
+    transparent: true,
+    opacity: 0.7,
+  });
   ensemblePoints = new THREE.Points(geo, mat);
   trajGroup.add(ensemblePoints);
-  if (ensembleInfo) {
-    const st = ensembleData.stats?.[Math.max(0, idx - 1)];
-    const t = ensembleData.epochs_s?.[idx] ?? idx;
-    ensembleInfo.textContent = `epoch ${idx} · t=${Number(t).toFixed(0)}s · rms=${st ? (st.rms_m / 1000).toFixed(1) + " km" : "—"}`;
-  }
 }
 
 async function loadPredictions() {
@@ -667,12 +771,19 @@ function drawGuide(idx) {
   const theta = Math.sqrt(total / (D*D*D)) * t;
   const mf = MU_M / total;
   const c = Math.cos(theta), s = Math.sin(theta);
-  const moon = [D*(1-mf)*c, D*(1-mf)*s];
-  const earth = [-D*mf*c, -D*mf*s];
+  // metre model -> kilometres, matching the bundle
+  const moon3 = [D*(1-mf)*c/1000, D*(1-mf)*s/1000, 0];
+  const earth3 = [-D*mf*c/1000, -D*mf*s/1000, 0];
+  // pick the two axes that actually span the orbit (this dataset is XY, not XZ)
+  const ax = orbitPlane?.a ?? 0;
+  const bx = orbitPlane?.b ?? 2;
+  const proj = (p) => [p[ax], p[bx]];
   // collect all points for scale
-  const all = pts.map((p) => [p[0], p[2]]); // x,z plane (top-down)
-  all.push(moon, earth);
-  if (Array.isArray(trajectoryData.points_corrected)) for (const p of trajectoryData.points_corrected) all.push([p[0], p[2]]);
+  const all = pts.map(proj);
+  all.push(proj(moon3), proj(earth3));
+  if (Array.isArray(trajectoryData.points_corrected)) {
+    for (const p of trajectoryData.points_corrected) all.push(proj(p));
+  }
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const p of all) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
   const cx = (minX+maxX)/2, cy = (minY+maxY)/2;
@@ -687,7 +798,7 @@ function drawGuide(idx) {
   // moon trail (none stored) skip; reference trail
   ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 1.5; ctx.beginPath();
   for (let k = 0; k <= i; k++) {
-    const p = px([pts[k][0], pts[k][2]]);
+    const p = px(proj(pts[k]));
     if (k === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
   }
   ctx.stroke();
@@ -696,17 +807,17 @@ function drawGuide(idx) {
   if (Array.isArray(corr) && corr.length) {
     ctx.strokeStyle = "rgba(244,114,182,0.9)"; ctx.lineWidth = 1.5; ctx.beginPath();
     for (let k = 0; k <= Math.min(i, corr.length-1); k++) {
-      const p = px([corr[k][0], corr[k][2]]);
+      const p = px(proj(corr[k]));
       if (k === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
     }
     ctx.stroke();
   }
   // earth
-  const ep = px(earth); ctx.fillStyle = "#2563eb"; ctx.beginPath(); ctx.arc(ep[0], ep[1], 6, 0, Math.PI*2); ctx.fill();
+  const ep = px(proj(earth3)); ctx.fillStyle = "#2563eb"; ctx.beginPath(); ctx.arc(ep[0], ep[1], 6, 0, Math.PI*2); ctx.fill();
   // moon
-  const mp = px(moon); ctx.fillStyle = "#9ca3af"; ctx.beginPath(); ctx.arc(mp[0], mp[1], 4, 0, Math.PI*2); ctx.fill();
+  const mp = px(proj(moon3)); ctx.fillStyle = "#9ca3af"; ctx.beginPath(); ctx.arc(mp[0], mp[1], 4, 0, Math.PI*2); ctx.fill();
   // spacecraft
-  const sp = px([pts[i][0], pts[i][2]]); ctx.fillStyle = "#f59e0b"; ctx.beginPath(); ctx.arc(sp[0], sp[1], 5, 0, Math.PI*2); ctx.fill();
+  const sp = px(proj(pts[i])); ctx.fillStyle = "#f59e0b"; ctx.beginPath(); ctx.arc(sp[0], sp[1], 5, 0, Math.PI*2); ctx.fill();
   // labels
   ctx.fillStyle = "#94a3b8"; ctx.font = "10px sans-serif";
   ctx.fillText("Earth", ep[0]+8, ep[1]);
@@ -1107,11 +1218,7 @@ async function applyCosmosJob({ job, outputs, manifest, dirURLBase, dirFiles }) 
     updateFrameUI(0);
     if (mode === "cosmos") {
       updateViewForMode();
-      // gentle refit of the camera on the pose ring
-      controls.target.set(0, 0, 0);
-      const r = EARTH_RADIUS * 10;
-      camera.position.set(r * 0.12, r * 1.15, r * 2.6);
-      controls.update();
+      fitCameraToCosmos();
     }
     return true;
   } catch (error) {
@@ -1183,6 +1290,16 @@ function updateViewForMode() {
     const show = el.dataset.modePanel === mode;
     el.classList.toggle("is-hidden", !show);
   });
+  // The two modes live at very different scales (lunar arc vs. a pose ring
+  // around Earth), so grid size and zoom limits have to follow the mode.
+  if (mode === "cosmos") {
+    applySceneScale(EARTH_RADIUS * 10);
+    if (cosmos.loaded) fitCameraToCosmos();
+  } else if (trajRadius) {
+    applySceneScale(trajRadius);
+    controls.minDistance = trajRadius * 0.02;
+    controls.maxDistance = trajRadius * 20;
+  }
   trajGroup.visible = mode === "orbit" && settings.showTrajectory;
   cosmosGroup.visible = mode === "cosmos" && cosmos.poses.length > 0 && settings.showCosmosFrames;
   scrubber.classList.toggle("is-hidden", !(mode === "cosmos" && cosmos.loaded));
@@ -1232,16 +1349,11 @@ orbitSlider?.addEventListener("input", () => stepOrbit(0));
 ensembleSlider?.addEventListener("input", () => renderEnsembleEpoch(parseInt(ensembleSlider.value, 10) || 0));
 showEnsembleCb?.addEventListener("change", () => renderEnsembleEpoch(parseInt(ensembleSlider?.value || "0", 10) || 0));
 resetViewBtn.addEventListener("click", () => {
-if (mode === "cosmos" && cosmos.loaded) {
-    // refit the camera on the reconstructed pose ring
-    controls.target.set(0, 0, 0);
-    const r = EARTH_RADIUS * 10;
-    camera.position.set(r * 0.12, r * 1.15, r * 2.6);
+  if (mode === "cosmos" && cosmos.loaded) {
+    fitCameraToCosmos();
   } else {
-    camera.position.set(0, 6000, 22000);
-    controls.target.set(0, 0, 0);
+    fitCameraToTrajectory(trajRadius);
   }
-  controls.update();
 });
 
 showPropCb?.addEventListener("change", () => {
@@ -1307,7 +1419,11 @@ window.addEventListener("keydown", (ev) => {
   else if (ev.key === "1") { mode = "orbit"; updateViewForMode(); }
   else if (ev.key === "2") { mode = "cosmos"; updateViewForMode(); }
   else if (ev.key === "f" || ev.key === "F") {
-    controls.target.set(0,0,0); camera.position.set(0,6000,22000); controls.update();
+    if (mode === "cosmos" && cosmos.loaded) {
+      fitCameraToCosmos();
+    } else {
+      fitCameraToTrajectory(trajRadius);
+    }
   }
 });
 
@@ -1415,11 +1531,21 @@ document.querySelectorAll("#pipeline-card [data-target]").forEach((btn) => {
     if (pipelineLog) pipelineLog.textContent = `Running make ${target}…`;
     setDot(pipelineDot, "loading");
     try {
-      const out = await invokeCmd("run_make", { target, cwd: "." });
+      let out = await invokeCmd("run_make", { target });
+      // residual/train rewrite sources; rebuild the bundle so the viewer sees them.
+      if (target === "residual" || target === "train") {
+        out += "\n$ make ui-data\n";
+        out += await invokeCmd("run_make", { target: "ui-data" });
+      }
       if (pipelineLog) pipelineLog.textContent = out;
       if (pipelineStatus) pipelineStatus.textContent = `make ${target} completed`;
       setDot(pipelineDot, "ok");
-      if (target === "ui-data") { loadTrajectory(); loadPinnResult(); loadPredictions(); loadManifest(); loadUiManifest(); }
+      loadTrajectory();
+      loadPinnResult();
+      loadPredictions();
+      loadManifest();
+      loadUiManifest();
+      loadEnsemble();
     } catch (e) {
       if (pipelineLog) pipelineLog.textContent = String(e);
       if (pipelineStatus) pipelineStatus.textContent = `make ${target} failed`;
@@ -1429,7 +1555,21 @@ document.querySelectorAll("#pipeline-card [data-target]").forEach((btn) => {
 });
 pickFolderBtn?.addEventListener("click", async () => {
   const p = await openFolderDialog();
-  if (p && jobBaseInput) jobBaseInput.value = p;
+  if (!p) {
+    // Browser fallback: the <input webkitdirectory> picker still works.
+    jobDirInput?.click();
+    return;
+  }
+  if (jobBaseInput) jobBaseInput.value = p;
+  settings.jobDir = p;
+  save();
+  try {
+    await loadJobFromPath(p);
+  } catch (e) {
+    setCosmosDot("err");
+    cosmosStatus.textContent = `Could not load job — ${e.message}`;
+    showError(`Cosmos job: ${e.message}`);
+  }
 });
 
 /* ---------------- boot ---------------- */
@@ -1466,7 +1606,18 @@ scanJobsBtn?.addEventListener("click", async () => {
   if (!base) return;
   settings.jobDir = base.endsWith("/") ? base : base + "/";
   save();
-  await loadDemoJob();
+  if (isLocalPath(base) && hasBackend) {
+    try {
+      await loadJobFromPath(base);
+    } catch (e) {
+      setCosmosDot("err");
+      cosmosStatus.textContent = `Could not load job — ${e.message}`;
+      showError(`Cosmos job: ${e.message}`);
+      return;
+    }
+  } else {
+    await loadDemoJob();
+  }
   if (jobListEl && cosmos.job) {
     jobListEl.innerHTML = "";
     const li = document.createElement("li");

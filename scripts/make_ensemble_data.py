@@ -1,9 +1,11 @@
 """Generate a Monte-Carlo ensemble for the UI's 3D viewer.
 
-Propagates a cloud of particles around the nominal lunar arc using the same
-circular Earth-Moon model as ``dynamics`` (velocity-Verlet, J2 off) and writes
-``tauri-src/src/data/ensemble.json``.  The result is a demo artifact: it shows
-the dispersion the CUDA propagator is built for, without requiring a GPU.
+Propagates a cloud of test particles seeded from the reference state with an
+Earth-only two-body model (velocity-Verlet) and writes
+``tauri-src/src/data/ensemble.json``.  This is deliberately *not* the n-body
+propagator: the reference object is the Moon itself, so treating it as a point
+mass would make nearby particles fall into the attractor.  The result is a
+demo artifact that shows bounded orbital dispersion without a GPU.
 
 Usage:
     uv run python scripts/make_ensemble_data.py
@@ -20,46 +22,35 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "tauri-src" / "src" / "data" / "ensemble.json"
 
 MU_EARTH = 3.986004418e14
-MU_MOON = 4.9048695e12
-MOON_DISTANCE = 3.844e8
 N_PARTICLES = 400
 N_STEPS = 60
 DT = 600.0  # seconds
-
-
-def earth_moon_positions(t: float) -> tuple[np.ndarray, np.ndarray]:
-    total_mu = MU_EARTH + MU_MOON
-    theta = (total_mu / MOON_DISTANCE**3) ** 0.5 * t
-    moon_fraction = MU_MOON / total_mu
-    c, s = np.cos(theta), np.sin(theta)
-    earth = np.array([-MOON_DISTANCE * moon_fraction * c,
-                      -MOON_DISTANCE * moon_fraction * s, 0.0])
-    moon = np.array([MOON_DISTANCE * (1.0 - moon_fraction) * c,
-                     MOON_DISTANCE * (1.0 - moon_fraction) * s, 0.0])
-    return earth, moon
+# Initial dispersion: 20,000 km and 5 m/s stay well clear of the Earth.
+SIGMA_POS_M = 20_000_000.0
+SIGMA_VEL_M_S = 5.0
 
 
 def accel(r: np.ndarray, t: float) -> np.ndarray:
-    earth, moon = earth_moon_positions(t)
-    d_e = r - earth
-    d_m = r - moon
-    a = -MU_EARTH * d_e / (np.linalg.norm(d_e) ** 3 + 1e-30)
-    a = a - MU_MOON * d_m / (np.linalg.norm(d_m) ** 3 + 1e-30)
-    return a
+    # Earth-only: see the module docstring for why the Moon is not an attractor.
+    norm = np.linalg.norm(r)
+    return -MU_EARTH * r / (norm**3 + 1e-30)
 
 
 def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
 
-    # Nominal: circular lunar orbit.
-    r0 = np.array([MOON_DISTANCE, 0.0, 0.0])
-    v0 = np.array([0.0, (MU_EARTH / MOON_DISTANCE) ** 0.5, 0.0])
-    # Use a slightly inclined, elliptical-ish spread for visual interest.
+    # Nominal state: the first reference sample, so the cloud starts on the arc.
+    import csv
+
+    with (ROOT / "data" / "reference.csv").open(newline="") as stream:
+        first = next(csv.DictReader(stream))
+    r0 = np.array([float(first["x"]), float(first["y"]), float(first["z"])])
+    v0 = np.array([float(first["vx"]), float(first["vy"]), float(first["vz"])])
     rng = np.random.default_rng(42)
     pos = np.tile(r0, (N_PARTICLES, 1)).astype(float)
     vel = np.tile(v0, (N_PARTICLES, 1)).astype(float)
-    pos += rng.normal(0, 2e6, pos.shape)
-    vel += rng.normal(0, 50.0, vel.shape)
+    pos += rng.normal(0, SIGMA_POS_M, pos.shape)
+    vel += rng.normal(0, SIGMA_VEL_M_S, vel.shape)
 
     nominal_pos = r0.copy()
     nominal_vel = v0.copy()
@@ -100,6 +91,8 @@ def main() -> None:
 
     payload = {
         "schema": "ensemble/v1",
+        "model": "earth-two-body",
+        "note": "demo dispersion cloud; not the n-body propagator",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "n_particles": N_PARTICLES,
         "n_epochs": N_STEPS + 1,

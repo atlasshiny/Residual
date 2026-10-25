@@ -115,7 +115,9 @@ SPICE ingestion is Python-only (`scripts/fetch_spice.py` with `spiceypy`); it pr
 | `make fetch-data` | Fetch and convert Horizons data |
 | `make fetch-spice` | Fetch and convert SPICE data (`SPICE_START`, `SPICE_STOP`, `SPICE_STEP`, `SPICE_MODE`) |
 | `make residual` | Generate `data/residual_table.csv` |
-| `make train` | Train models; writes `ml/pinn/pinn_result.json` |
+| `make train` | Train models on `data/residual_table.csv` (or `DATA=...`); writes `ml/pinn/pinn_result.json` |
+| `make ui-data` | Rebuild the Tauri viewer bundle in `tauri-src/src/data/` |
+| `make ensemble-data` | Regenerate the demo Monte-Carlo cloud (`ensemble.json`) |
 | `make test` | Full test suite (CUDA + Rust + Python) |
 | `make test-cpu` | CPU-only validation (`SKIP_CUDA_TESTS=1`) |
 | `make test-cuda` | Full CUDA validation |

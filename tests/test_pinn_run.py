@@ -11,7 +11,37 @@ from ml.pinn.run import build_parser, run
 
 
 def _parse(out, *extra, epochs=2):
-    return build_parser().parse_args(["--out", str(out), *extra])
+    """Parse args for an isolated run.
+
+    Every output path is redirected next to ``out`` so a test can never
+    overwrite the committed ``ml/pinn`` artifacts (this used to happen because
+    only ``--out`` was set and the remaining paths kept their defaults).
+    """
+    out = Path(out)
+    out_dir = out.parent
+    return build_parser().parse_args(
+        [
+            "--out",
+            str(out),
+            "--weights-out",
+            str(out_dir / "pinn_models.pt"),
+            "--mlp-weights-out",
+            str(out_dir / "mlp_model.pt"),
+            "--predictions-out",
+            str(out_dir / "pinn_predictions.json"),
+            "--mlp-predictions-out",
+            str(out_dir / "mlp_predictions.json"),
+            "--mlp-predictions-csv-out",
+            str(out_dir / "mlp_predictions.csv"),
+            "--predictions-csv-out",
+            str(out_dir / "pinn_predictions.csv"),
+            "--sindy-predictions-csv-out",
+            str(out_dir / "sindy_predictions.csv"),
+            "--epochs",
+            str(epochs),
+            *extra,
+        ]
+    )
 
 
 def _load(path):

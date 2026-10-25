@@ -61,9 +61,11 @@ residual: data/reference.csv
 
 # Train PINN/MLP/SINDy.  Uses data/residual_table.csv when present, otherwise
 # falls back to the synthetic demo.  Override with e.g.
-#   make train DATA=other.csv ARGS="--data other.csv --epochs 50"
+#   make train DATA=other.csv
+#   make train ARGS="--epochs 50 --targets y"
+RESIDUAL_TABLE ?= $(firstword $(wildcard data/residual_table.csv))
 train:
-	uv run --extra data --extra gpu python -m ml.pinn.run $(ARGS)
+	uv run --extra data --extra gpu python -m ml.pinn.run $(if $(RESIDUAL_TABLE),--data $(RESIDUAL_TABLE)) $(ARGS)
 
 test: cuda python
 	uv run --extra dev --extra data --extra gpu pytest -q tests ml
