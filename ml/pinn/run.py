@@ -70,6 +70,18 @@ def _eval(model, X, Y, predict=None):
 
 def run(args) -> tuple:
     random.seed(0)
+    try:
+        import torch
+
+        torch.manual_seed(0)
+    except ImportError:
+        pass
+    try:
+        import numpy as np
+
+        np.random.seed(0)
+    except ImportError:
+        pass
     mission = load_mission(args.mission) if args.mission else None
 
     if args.data:
@@ -103,11 +115,16 @@ def run(args) -> tuple:
         # training. E.g. --targets y -> pos_cols has 1 col -> vel_cols = ["dvx"].
         vel_cols = ["dvx", "dvy", "dvz"][: len(pos_cols)]
 
-        # Temporal Split
+        # Random (interpolation) split by default; keeps temporal split available
+        # via split_by_time for extrapolation evaluation.
         test_fraction = float(args.test_fraction)
-        split_idx = int(len(df) * (1 - test_fraction))
-        df_train = df.iloc[:split_idx]
-        df_test = df.iloc[split_idx:]
+        n_train = int(len(df) * (1 - test_fraction))
+        perm = list(range(len(df)))
+        random.Random(0).shuffle(perm)
+        train_idx = perm[:n_train]
+        test_idx = perm[n_train:]
+        df_train = df.iloc[train_idx].reset_index(drop=True)
+        df_test = df.iloc[test_idx].reset_index(drop=True)
 
         # Scalers
         scaler_pos = StandardScaler()
@@ -122,6 +139,11 @@ def run(args) -> tuple:
         # Transform test
         Y_pos_scaled_test = scaler_pos.transform(df_test[pos_cols].values)
         scaler_vel.transform(df_test[vel_cols].values)
+
+        t_std = float(np.std(df_train[time_col].to_numpy(dtype=float), ddof=0))
+        if not np.isfinite(t_std) or t_std == 0.0:
+            t_std = 1.0
+        _vel_scale = (scaler_pos.scale_ / (t_std * scaler_vel.scale_)).tolist()
 
         # Split train into fit + val
         val_frac = 0.1
@@ -172,6 +194,7 @@ def run(args) -> tuple:
         masked_frac = 0.0
         scaler_pos = None
         df = None
+        _vel_scale = 1.0
 
     n_features = len(X_fit[0])
     out_dim = len(Y_pos_scaled_fit[0])
@@ -187,7 +210,8 @@ def run(args) -> tuple:
         Y_pos_val=Y_pos_scaled_val,
         Y_vel_val=Y_vel_scaled_val,
         lr=args.lr,
-        patience=args.patience,
+        patience=None,
+        vel_scale=_vel_scale,
     )
 
     # Eval PINN on original scale
@@ -211,7 +235,7 @@ def run(args) -> tuple:
     )
 
     # --- MLP ---
-    mlp = MLP([n_features, 8, 4, out_dim], seed=0)
+    mlp = MLP([n_features, 64, 32, out_dim], seed=0)
     mlp.fit(
         X_fit,
         Y_pos_scaled_fit,
@@ -243,7 +267,7 @@ def run(args) -> tuple:
     )
 
     # --- SINDy ---
-    sindy_deg = 2
+    sindy_deg = 1
     Xi, names, exprs = sindy(X_train, Y_pos_raw_train, degree=sindy_deg)
     sindy_predict_fn = lambda batch: sindy_predict(batch, Xi, degree=sindy_deg)
     sin_train_mse, sin_train_r2 = _eval(
@@ -325,7 +349,7 @@ def build_parser():
     parser.add_argument("--engineer", action="store_true")
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--out", default="ml/pinn/pinn_result.json")
     return parser

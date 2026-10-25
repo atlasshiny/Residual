@@ -81,6 +81,7 @@ def train_pinn(
     Y_pos_val=None,
     Y_vel_val=None,
     patience=20,
+    vel_scale=None,
 ):
     """
     Train PINN with a composite loss: MSE(pos) + lambda * MSE(vel).
@@ -97,6 +98,15 @@ def train_pinn(
     Y_pos = torch.tensor(Y_pos, dtype=torch.float32)
     Y_vel = torch.tensor(Y_vel, dtype=torch.float32)
 
+    if vel_scale is None:
+        vel_scale_t = None
+    else:
+        vel_scale_t = torch.as_tensor(vel_scale, dtype=torch.float32)
+        if vel_scale_t.dim() == 0:
+            vel_scale_t = vel_scale_t.view(1, 1)
+        elif vel_scale_t.dim() == 1:
+            vel_scale_t = vel_scale_t.view(1, -1)
+
     if X_val is not None:
         X_val = torch.tensor(X_val, dtype=torch.float32)
         Y_pos_val = torch.tensor(Y_pos_val, dtype=torch.float32)
@@ -112,6 +122,8 @@ def train_pinn(
 
         # 2. Velocity loss (Physics: v = dr/dt)
         pred_vel = model.get_derivative(X_fit)
+        if vel_scale_t is not None:
+            pred_vel = pred_vel * vel_scale_t
         loss_vel = criterion(pred_vel, Y_vel)
 
         total_loss = loss_pos + loss_vel
@@ -128,6 +140,8 @@ def train_pinn(
             model.eval()
             v_pos = model(X_val, return_tensor=True)
             v_vel = model.get_derivative(X_val)
+            if vel_scale_t is not None:
+                v_vel = v_vel * vel_scale_t
 
             with torch.no_grad():
                 val_loss = criterion(v_pos, Y_pos_val) + criterion(v_vel, Y_vel_val)
