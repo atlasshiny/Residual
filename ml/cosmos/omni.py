@@ -155,7 +155,9 @@ class OmniClient:
         """POST generation fields and return the raw MP4 bytes."""
 
         path = os.getenv("COSMOS_VIDEO_PATH", DEFAULT_VIDEO_PATH)
-        data = self._post_form(path, fields, timeout=self.video_timeout, accept="video/mp4")
+        data = self._post_form(
+            path, fields, timeout=self.video_timeout, accept="video/mp4"
+        )
         if not data:
             raise OmniUnavailable("vLLM-Omni returned an empty video response")
         return data

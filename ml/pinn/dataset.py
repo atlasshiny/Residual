@@ -171,10 +171,8 @@ def build_xy(df, feature_cols=None, target_cols=None):
     n = len(df)
     feat_data = [df[c].tolist() for c in feature_cols]
     tgt_data = [df[c].tolist() for c in target_cols]
-    X = [[float(feat_data[k][i]) for k in range(len(feature_cols))]
-         for i in range(n)]
-    Y = [[float(tgt_data[k][i]) for k in range(len(target_cols))]
-         for i in range(n)]
+    X = [[float(feat_data[k][i]) for k in range(len(feature_cols))] for i in range(n)]
+    Y = [[float(tgt_data[k][i]) for k in range(len(target_cols))] for i in range(n)]
     return X, Y
 
 

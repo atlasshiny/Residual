@@ -14,7 +14,9 @@ from ml.pinn.features import engineer_features
 def _df():
     import pandas as pd
 
-    return pd.DataFrame({"t": [float(i * 10) for i in range(20)], "y": [float(i) for i in range(20)]})
+    return pd.DataFrame(
+        {"t": [float(i * 10) for i in range(20)], "y": [float(i) for i in range(20)]}
+    )
 
 
 def test_engineer_adds_columns():

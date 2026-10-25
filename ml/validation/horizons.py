@@ -89,7 +89,9 @@ def load_library(path: str | os.PathLike[str] | None = None):
     return lib
 
 
-def default_config(lib, dt: float = 60.0, perturbation: int = 0, moon_distance: float = 0.0):
+def default_config(
+    lib, dt: float = 60.0, perturbation: int = 0, moon_distance: float = 0.0
+):
     config = MbsConfig()
     lib.mbs_default_config(ctypes.byref(config))
     config.dt = float(dt)
@@ -237,7 +239,9 @@ def make_synthetic_reference(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Compare CUDA propagator to reference trajectory")
+    parser = argparse.ArgumentParser(
+        description="Compare CUDA propagator to reference trajectory"
+    )
     parser.add_argument("reference", help="CSV or parquet file with t,x,y,z,vx,vy,vz")
     parser.add_argument("--moon-distance", type=float, default=0.0)
     parser.add_argument("--perturbation", type=int, default=0)
@@ -245,7 +249,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     lib = load_library()
-    cfg = default_config(lib, moon_distance=args.moon_distance, perturbation=args.perturbation)
+    cfg = default_config(
+        lib, moon_distance=args.moon_distance, perturbation=args.perturbation
+    )
     metrics = compare(args.reference, lib=lib, config=cfg)
     Path(args.out).write_text(json.dumps(metrics, indent=2))
     print(json.dumps(metrics, indent=2))

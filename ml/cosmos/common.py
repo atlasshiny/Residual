@@ -139,9 +139,7 @@ def safe_job_id(job: dict[str, Any]) -> str:
     job_id = job.get("job_id") or job.get("id")
     if not isinstance(job_id, str) or not job_id:
         raise JobError("job.json has no job_id/id")
-    if job_id.startswith(".") or any(
-        not (c.isalnum() or c in "._-") for c in job_id
-    ):
+    if job_id.startswith(".") or any(not (c.isalnum() or c in "._-") for c in job_id):
         raise JobError(
             f"job id {job_id!r} must be non-empty and contain only [A-Za-z0-9._-]"
         )
@@ -233,9 +231,7 @@ def coerce_actions(value: Any) -> list[list[float]]:
     rows: list[list[float]] = []
     for index, row in enumerate(value):
         if not isinstance(row, (list, tuple)) or len(row) != ACTION_DIM:
-            raise JobError(
-                f"action row {index} must have exactly {ACTION_DIM} numbers"
-            )
+            raise JobError(f"action row {index} must have exactly {ACTION_DIM} numbers")
         numbers = [float(item) for item in row]
         if not all(math.isfinite(item) for item in numbers):
             raise JobError(f"action row {index} contains a non-finite value")

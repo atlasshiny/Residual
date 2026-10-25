@@ -37,9 +37,7 @@ MODE = common.MODE_TRANSFER
 VIDEO_NAME = "output.mp4"
 
 
-def _caption(
-    job: dict[str, Any], params: dict[str, Any], job_dir: Path
-) -> str | None:
+def _caption(job: dict[str, Any], params: dict[str, Any], job_dir: Path) -> str | None:
     """Inline ``prompt``/``caption`` wins over a ``prompt_json`` file."""
 
     text = common.pick(job, params, "prompt", "caption")
@@ -141,7 +139,9 @@ def run(
             "prompt_upsampling": "false",
             "size": common.format_size(resolution),
         }
-        common.log(WORKER, "generating video via vLLM-Omni", frames=frame_count, fps=fps)
+        common.log(
+            WORKER, "generating video via vLLM-Omni", frames=frame_count, fps=fps
+        )
         video_path = out_dir / VIDEO_NAME
         client.generate_video_to(video_path, fields)
         backend_label = "vllm-omni"

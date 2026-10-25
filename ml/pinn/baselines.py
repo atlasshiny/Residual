@@ -10,6 +10,7 @@ try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
+
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
@@ -26,23 +27,28 @@ __all__ = [
     "sindy_predict",
 ]
 
+
 def mse(pred, target):
     pred = np.asarray(pred)
     target = np.asarray(target)
-    return np.mean((pred - target)**2)
+    return np.mean((pred - target) ** 2)
+
 
 class MLP(nn.Module if HAS_TORCH else object):
     """Small fully-connected MLP trained with PyTorch.
     Maintains a list-of-lists interface for compatibility.
     """
+
     def __init__(self, dims, seed=0):
         if not HAS_TORCH:
-            raise ImportError("PyTorch is required for the MLP baseline. Install with 'pip install .[gpu]' or 'uv sync --extra gpu'.")
+            raise ImportError(
+                "PyTorch is required for the MLP baseline. Install with 'pip install .[gpu]' or 'uv sync --extra gpu'."
+            )
         super().__init__()
         torch.manual_seed(seed)
         layers = []
         for i in range(len(dims) - 1):
-            layers.append(nn.Linear(dims[i], dims[i+1]))
+            layers.append(nn.Linear(dims[i], dims[i + 1]))
             if i < len(dims) - 2:
                 layers.append(nn.ReLU())
         self.net = nn.Sequential(*layers)
@@ -54,18 +60,28 @@ class MLP(nn.Module if HAS_TORCH else object):
             out = self.net(x_tensor)
         return out.numpy().tolist()
 
-    def fit(self, X, Y, epochs=200, lr=1e-2, verbose=True,
-              X_val=None, Y_val=None, patience=None, weight_decay=0.0):
+    def fit(
+        self,
+        X,
+        Y,
+        epochs=200,
+        lr=1e-2,
+        verbose=True,
+        X_val=None,
+        Y_val=None,
+        patience=None,
+        weight_decay=0.0,
+    ):
         X_t = torch.tensor(X, dtype=torch.float32)
         Y_t = torch.tensor(Y, dtype=torch.float32)
-        
+
         optimizer = optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
         criterion = nn.MSELoss()
-        
+
         best_val_loss = float("inf")
         patience_counter = 0
         best_state = None
-        
+
         if X_val is not None:
             X_val_t = torch.tensor(X_val, dtype=torch.float32)
             Y_val_t = torch.tensor(Y_val, dtype=torch.float32)
@@ -79,7 +95,7 @@ class MLP(nn.Module if HAS_TORCH else object):
             loss = criterion(pred, Y_t)
             loss.backward()
             optimizer.step()
-            
+
             if X_val_t is not None:
                 self.eval()
                 with torch.no_grad():
@@ -93,15 +109,17 @@ class MLP(nn.Module if HAS_TORCH else object):
                         patience_counter += 1
                         if patience is not None and patience_counter >= patience:
                             break
-            
+
             if verbose and (epoch == 1 or epoch % 20 == 0 or epoch == epochs):
                 print(f"[mlp] epoch {epoch:4d}  mse = {loss.item():.6e}")
-        
+
         if best_state is not None:
             self.load_state_dict(best_state)
         return self
 
+
 # --- SINDy remains numpy-based as it is not a gradient-descent problem ---
+
 
 def linear_regression(X, Y):
     n = len(X)
@@ -124,16 +142,19 @@ def linear_regression(X, Y):
         piv = max(range(col, d + 1), key=lambda r: abs(A[r][col]))
         A[col], A[piv] = A[piv], A[col]
         pv = A[col][col]
-        if abs(pv) < 1e-30: pv = 1e-30
+        if abs(pv) < 1e-30:
+            pv = 1e-30
         for j in range(col, d + 1 + m):
             A[col][j] /= pv
         for r in range(d + 1):
-            if r == col: continue
+            if r == col:
+                continue
             factor = A[r][col]
             for j in range(col, d + 1 + m):
                 A[r][j] -= factor * A[col][j]
     W = [[A[a][d + 1 + k] for k in range(m)] for a in range(d + 1)]
     return W
+
 
 def linear_predict(X, W):
     out = []
@@ -144,6 +165,7 @@ def linear_predict(X, W):
                 pred[k] += W[i + 1][k] * row[i]
         out.append(pred)
     return out
+
 
 def poly_terms(n_features, degree=2):
     if degree < 1:
@@ -164,6 +186,7 @@ def poly_terms(n_features, degree=2):
     terms.append((tuple([0] * n_features), "1"))
     return terms
 
+
 def poly_transform(row, terms):
     values = []
     for exponents, _name in terms:
@@ -174,6 +197,7 @@ def poly_transform(row, terms):
         values.append(value)
     return values
 
+
 def _poly_features(X, degree=2):
     if not X:
         raise ValueError("X must be non-empty")
@@ -183,6 +207,7 @@ def _poly_features(X, degree=2):
     feats = [poly_transform(X[ni], terms) for ni in range(n)]
     return feats, [name for _exponents, name in terms]
 
+
 def sindy_predict(X, Xi, degree=2):
     if not X:
         return []
@@ -191,9 +216,11 @@ def sindy_predict(X, Xi, degree=2):
     pred = []
     for row in X:
         vals = poly_transform(row, terms)
-        pred.append([sum(Xi[j][a] * vals[a] for a in range(len(vals)))
-                    for j in range(out_dim)])
+        pred.append(
+            [sum(Xi[j][a] * vals[a] for a in range(len(vals))) for j in range(out_dim)]
+        )
     return pred
+
 
 def _solve(A, b, ridge=1e-10):
     n = len(A)
@@ -217,9 +244,9 @@ def _solve(A, b, ridge=1e-10):
             if r != col:
                 factor = M[r][col]
                 if factor != 0.0:
-                    M[r] = [M[r][t] - factor * M[col][t]
-                            for t in range(n + 1)]
+                    M[r] = [M[r][t] - factor * M[col][t] for t in range(n + 1)]
     return [M[i][n] for i in range(n)]
+
 
 def _format_expression(coeffs, names):
     parts = []
@@ -228,14 +255,17 @@ def _format_expression(coeffs, names):
             parts.append(f"{c:+.4f}*{name}")
     return " ".join(parts).lstrip("+ ") if parts else "0"
 
+
 def sindy(X, Y, threshold=0.05, degree=2):
     if not X:
         raise ValueError("X must be non-empty")
     F, names = _poly_features(X, degree)
     m = len(F[0])
     n = len(F)
-    FtF = [[sum(F[ni][a] * F[ni][b] for ni in range(n))
-            for b in range(m)] for a in range(m)]
+    FtF = [
+        [sum(F[ni][a] * F[ni][b] for ni in range(n)) for b in range(m)]
+        for a in range(m)
+    ]
     out_dim = len(Y[0])
     Xi = []
     for j in range(out_dim):
@@ -250,10 +280,16 @@ def sindy(X, Y, threshold=0.05, degree=2):
             if not support:
                 continue
             A = [[F[ni][a] for a in support] for ni in range(n)]
-            AtA = [[sum(A[ni][p] * A[ni][q] for ni in range(n))
-                    for q in range(len(support))] for p in range(len(support))]
-            Aty = [sum(A[ni][p] * Y[ni][j] for ni in range(n))
-                    for p in range(len(support))]
+            AtA = [
+                [
+                    sum(A[ni][p] * A[ni][q] for ni in range(n))
+                    for q in range(len(support))
+                ]
+                for p in range(len(support))
+            ]
+            Aty = [
+                sum(A[ni][p] * Y[ni][j] for ni in range(n)) for p in range(len(support))
+            ]
             sol = _solve(AtA, Aty)
             new_xi = [0.0] * m
             for idx, a in enumerate(support):

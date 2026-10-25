@@ -6,6 +6,7 @@ Usage:
     # or with overrides:
     cfg = PipelineConfig.from_yaml("configs/pinn.yaml", overrides={"epochs": 200})
 """
+
 from __future__ import annotations
 
 from pathlib import Path

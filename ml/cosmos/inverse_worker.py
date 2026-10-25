@@ -110,7 +110,11 @@ def run(
             fps=fps,
         )
         actions = client.infer_actions(
-            video, model=model, domain_name=str(domain_name), fps=fps, frames=frame_count
+            video,
+            model=model,
+            domain_name=str(domain_name),
+            fps=fps,
+            frames=frame_count,
         )
         if not actions:
             raise common.JobError("vLLM-Omni returned no action rows")
@@ -130,9 +134,7 @@ def run(
         backend_label = "synthetic"
         mock = True
         action_source = "synthetic"
-        note = (
-            "synthetic inverse-dynamics fallback; each row is one 9D relative action"
-        )
+        note = "synthetic inverse-dynamics fallback; each row is one 9D relative action"
 
     frame_count = len(actions) + 1  # invariant: action_count == frames - 1
 

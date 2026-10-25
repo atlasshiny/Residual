@@ -1,6 +1,5 @@
 """Tests for the Horizons/SPICE comparison helper."""
 
-
 import pytest
 
 from ml.validation.horizons import (

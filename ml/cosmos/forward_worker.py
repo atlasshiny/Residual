@@ -56,7 +56,9 @@ def _media_input(
             or inputs.get("image")
             or inputs.get("video")
             or inputs.get("control_video")
-            or common.first_media(job, common.VIDEO_EXTENSIONS + common.IMAGE_EXTENSIONS),
+            or common.first_media(
+                job, common.VIDEO_EXTENSIONS + common.IMAGE_EXTENSIONS
+            ),
         ),
     )
 

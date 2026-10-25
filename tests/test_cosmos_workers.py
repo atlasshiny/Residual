@@ -61,9 +61,7 @@ def run_worker(
 def write_job(job_dir: Path, job: dict) -> Path:
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "job.json").write_text(
-        json.dumps(job, indent=2), encoding="utf-8"
-    )
+    (job_dir / "job.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
     return job_dir
 
 
@@ -490,9 +488,7 @@ def test_write_outputs_marks_video_artifact(tmp_path):
 
     kinds = {artifact["kind"] for artifact in manifest["artifacts"]}
     assert kinds == {"pose_json", "video"}
-    video_artifact = next(
-        a for a in manifest["artifacts"] if a["kind"] == "video"
-    )
+    video_artifact = next(a for a in manifest["artifacts"] if a["kind"] == "video")
     assert video_artifact["path"] == "output.mp4"
     assert video_artifact["bytes"] == video.stat().st_size
 

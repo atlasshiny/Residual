@@ -11,9 +11,7 @@ from ml.pinn.run import build_parser, run
 
 
 def _parse(out, *extra, epochs=2):
-    return build_parser().parse_args(
-        ["--out", str(out), *extra]
-    )
+    return build_parser().parse_args(["--out", str(out), *extra])
 
 
 def _load(path):
@@ -23,6 +21,7 @@ def _load(path):
 # ---------------------------------------------------------------------------
 # Deterministic time-window split
 # ---------------------------------------------------------------------------
+
 
 def test_split_by_time_sizes_and_holdout_order():
     X = [[float(i)] for i in range(100)]
@@ -46,9 +45,7 @@ def test_split_by_time_sorts_caller_order():
     X = [[t] for t in times]
     Y = [[t] for t in times]
 
-    X_train, X_test, _Y_train, _Y_test = split_by_time(
-        X, Y, t=times, test_fraction=0.4
-    )
+    X_train, X_test, _Y_train, _Y_test = split_by_time(X, Y, t=times, test_fraction=0.4)
 
     assert len(X_train) == 3
     assert len(X_test) == 2
@@ -71,6 +68,7 @@ def test_split_by_time_is_deterministic_and_requires_ordered_times():
 # Burn masking
 # ---------------------------------------------------------------------------
 
+
 def test_burn_mask_is_half_open():
     times = [0.0, 10.0, 15.0, 20.0]
     burns = [{"label": "TLI", "start_s": 10.0, "end_s": 20.0}]
@@ -92,11 +90,14 @@ def test_burn_mask_is_half_open():
 # End-to-end run
 # ---------------------------------------------------------------------------
 
+
 def test_synthetic_run_writes_test_metrics(tmp_path):
     out = tmp_path / "pinn_result.json"
     results, out_path = run(_parse(out))
 
     assert out_path == str(out)
+
+
 def test_synthetic_run_writes_test_metrics(tmp_path):
     out = tmp_path / "pinn_result.json"
     results, out_path = run(_parse(out))
@@ -114,21 +115,30 @@ def test_synthetic_run_writes_test_metrics(tmp_path):
 
 def test_run_applies_mission_burn_mask_before_training(tmp_path):
     mission = tmp_path / "mission.json"
-    mission.write_text(json.dumps({
-        "name": "Artemis test",
-        "burns": [{"label": "TLI", "start_s": 0.0, "end_s": 100.0}],
-    }))
+    mission.write_text(
+        json.dumps(
+            {
+                "name": "Artemis test",
+                "burns": [{"label": "TLI", "start_s": 0.0, "end_s": 100.0}],
+            }
+        )
+    )
     out = tmp_path / "pinn_result.json"
 
     results, _ = run(_parse(out, "--mission", str(mission)))
     data = _load(out)
 
+
 def test_run_applies_mission_burn_mask_before_training(tmp_path):
     mission = tmp_path / "mission.json"
-    mission.write_text(json.dumps({
-        "name": "Artemis test",
-        "burns": [{"label": "TLI", "start_s": 0.0, "end_s": 100.0}],
-    }))
+    mission.write_text(
+        json.dumps(
+            {
+                "name": "Artemis test",
+                "burns": [{"label": "TLI", "start_s": 0.0, "end_s": 100.0}],
+            }
+        )
+    )
     out = tmp_path / "pinn_result.json"
 
     results, _ = run(_parse(out, "--mission", str(mission)))
@@ -148,12 +158,17 @@ def test_run_uses_time_column_for_residual_table(tmp_path):
     table.write_text("\n".join(rows) + "\n")
 
     out = tmp_path / "pinn_result.json"
-    results, _ = run(_parse(
-        out,
-        "--data", str(table),
-        "--features", "x0,x1",
-        "--targets", "y",
-    ))
+    results, _ = run(
+        _parse(
+            out,
+            "--data",
+            str(table),
+            "--features",
+            "x0,x1",
+            "--targets",
+            "y",
+        )
+    )
 
     data = _load(out)
     for model in ("pinn", "mlp", "sindy", "linreg"):
