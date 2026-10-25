@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice fetch-lro-transfer fetch-moon-training-data synthetic-rocket-data train-synthetic-dynamics evaluate-artemis-transfer evaluate-synthetic-rollout residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench clean ui-data ensemble-data
+.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice fetch-lro-transfer fetch-moon-training-data synthetic-rocket-data train-synthetic-dynamics evaluate-artemis-transfer evaluate-synthetic-rollout residual residual-tabulated residual-tabulated-sun train evaluate-pinn-splits test-cpu test-cuda tauri bench clean ui-data ensemble-data
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -205,6 +205,17 @@ residual-tabulated-sun: $(PRESERVED_REFERENCE) data/reference_sun.csv
 RESIDUAL_TABLE ?= $(firstword $(wildcard data/residual_table.csv))
 train:
 	uv run --extra data --extra gpu python -m ml.pinn.run $(if $(RESIDUAL_TABLE),--data $(RESIDUAL_TABLE)) $(ARGS)
+
+# Re-run the models across split modes and seeds, then aggregate mean/spread.
+# Group splits require a multi-arc table with an arc_id column.
+SPLIT_EVAL_ARGS ?= --splits random,time --seeds 0,1,2
+evaluate-pinn-splits:
+	@test -f "$(DATA)" || { \
+	  echo "No residual table at $(DATA); run 'make residual' or pass DATA=path"; \
+	  exit 1; \
+	}
+	uv run --extra data --extra gpu python -m ml.pinn.evaluate_splits \
+	  --data $(DATA) $(SPLIT_EVAL_ARGS)
 
 test: cuda python
 	uv run --extra dev --extra data --extra gpu pytest -q tests ml

@@ -191,6 +191,7 @@ metadata; direct 600-second next-state regression drifts too much.
 | `make residual-tabulated` | Generate `data/residual_table_tabulated.csv` from the measured Earth-Moon geometry (`--preserve-distance` reference) and print the analytic/tabulated RMS comparison |
 | `make residual-tabulated-sun` | Same as `residual-tabulated` but also attaches the Sun as a tidal third body (`data/reference_sun.csv`) |
 | `make train` | Train models on `data/residual_table.csv` (or `DATA=...`); writes `ml/pinn/pinn_result.json` |
+| `make evaluate-pinn-splits` | Re-run the models across split modes/seeds and aggregate mean/spread into `results/pinn_split_eval.json` |
 | `make ui-data` | Rebuild the Tauri viewer bundle in `tauri-src/src/data/` (embeds the per-epoch Sun bearing from `data/reference_sun.csv` when present) |
 | `make ensemble-data` | Regenerate the demo Monte-Carlo cloud (`ensemble.json`) |
 | `make test` | Full test suite (CUDA + Rust + Python) |

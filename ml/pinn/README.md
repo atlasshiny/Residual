@@ -43,6 +43,18 @@ Split modes:
 the split mode, seed, row counts, per-split time ranges, and held-out group IDs,
 so an interpolation score cannot be mistaken for a temporal or mission holdout.
 
+Multi-split evaluation:
+
+    python -m ml.pinn.evaluate_splits --data data/residual_table.csv \
+        --splits random,time --seeds 0,1,2 \
+        --out results/pinn_split_eval.json
+
+This reruns the full pipeline for each `(split, seed)` pair, keeps each run's
+artifacts under `results/pinn_split_runs/`, and writes mean, population
+standard deviation, min, max, and sample count for every model metric.  Use
+`--splits random,time,group` only when the table has at least two values in
+`--group-col`.
+
 Dataset helpers:
     from ml.pinn.dataset import load_residual_table, build_xy, split_by_time
     df = load_residual_table("residual_table.parquet")
