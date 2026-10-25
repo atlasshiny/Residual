@@ -22,7 +22,7 @@ The project implements the restricted Earth-Moon multibody problem with a symple
 
 ## 📊 Results & Analysis
 
-Current results on the 30-day Moon reference arc (`data/residual_table.csv`, 4321 samples, 0 burn-masked) with the default pipeline. The train/test split is a **seeded random interpolation split** (`--test-fraction 0.2`); a temporal `split_by_time` helper remains available for extrapolation studies.
+Current results on the 30-day Moon reference arc (`data/residual_table.csv`, 4321 samples, 0 burn-masked) with the default pipeline. The train/test split is a **seeded random interpolation split** (`--split random --test-fraction 0.2`); use `--split time` or `--split group` for temporal and whole-arc holdouts.
 
 | Model | Train R² | Test R² | Behavior |
 | :--- | :---: | :---: | :--- |
@@ -94,7 +94,7 @@ cargo build --workspace
 
 1. **Fetch Reference**: `make fetch-data` (JPL Horizons) or `make fetch-spice` (offline SPICE kernels).
 2. **Generate Residuals**: `make residual` (propagates and computes `reference − propagated`).
-3. **Train Correction**: `make train` (trains PINN, MLP, SINDy, linear regression).
+3. **Train Correction**: `make train` (trains PINN, MLP, SINDy, linear regression). Use `--split time` or `--split group --group-col arc_id` for temporal or whole-arc holdouts; the result JSON records the split metadata.
 4. **Build a Cosmos job** (optional):
    ```bash
    uv run --extra data python scripts/pinn_to_cosmos.py \

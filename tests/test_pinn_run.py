@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from ml.pinn.dataset import apply_burn_mask, burn_keep_mask, split_by_time
-from ml.pinn.run import build_parser, run
+from ml.pinn.run import _select_split, build_parser, run
 
 
 def _parse(out, *extra, epochs=2):
@@ -92,6 +92,80 @@ def test_split_by_time_is_deterministic_and_requires_ordered_times():
     b = split_by_time(X, Y, t=times, test_fraction=0.2)
     assert a == b
     assert len(a[1]) == 6
+
+
+# ---------------------------------------------------------------------------
+# Split modes
+# ---------------------------------------------------------------------------
+
+
+def _split_frame():
+    pandas = pytest.importorskip("pandas")
+    return pandas.DataFrame(
+        {
+            "t": [float(i) for i in range(12)][::-1],
+            "arc_id": ["a"] * 3 + ["b"] * 3 + ["c"] * 3 + ["d"] * 3,
+            "x0": [float(i) for i in range(12)],
+            "y": [float(i * i) for i in range(12)],
+        }
+    )
+
+
+def test_select_split_time_holds_out_latest_samples():
+    df = _split_frame()
+    args = build_parser().parse_args(["--split", "time", "--test-fraction", "0.25"])
+    train, test, meta = _select_split(df, args, "t")
+
+    assert len(train) == 9
+    assert len(test) == 3
+    assert meta["mode"] == "time"
+    assert meta["split_unit"] == "time"
+    assert meta["n_train"] == 9
+    assert meta["n_test"] == 3
+    assert max(train["t"]) < min(test["t"])
+    assert meta["train_time_range_s"] == [
+        float(min(train["t"])),
+        float(max(train["t"])),
+    ]
+    assert meta["test_time_range_s"] == [float(min(test["t"])), float(max(test["t"]))]
+
+
+def test_select_split_group_holds_out_whole_arcs():
+    df = _split_frame()
+    args = build_parser().parse_args(
+        ["--split", "group", "--group-col", "arc_id", "--test-fraction", "0.25"]
+    )
+    train, test, meta = _select_split(df, args, "t")
+
+    assert meta["mode"] == "group"
+    assert meta["split_unit"] == "group"
+    assert len(meta["test_groups"]) == 1
+    assert set(train["arc_id"]).isdisjoint(set(test["arc_id"]))
+    assert set(test["arc_id"]) == set(meta["test_groups"])
+    assert set(train["arc_id"]) == set(meta["train_groups"])
+    assert len(train) + len(test) == len(df)
+
+
+def test_select_split_random_is_seeded():
+    df = _split_frame()
+    args_a = build_parser().parse_args(["--split", "random", "--seed", "7"])
+    args_b = build_parser().parse_args(["--split", "random", "--seed", "7"])
+    train_a, test_a, meta_a = _select_split(df, args_a, "t")
+    train_b, test_b, _meta_b = _select_split(df, args_b, "t")
+
+    assert train_a["x0"].tolist() == train_b["x0"].tolist()
+    assert test_a["x0"].tolist() == test_b["x0"].tolist()
+    assert meta_a["mode"] == "random"
+    assert meta_a["seed"] == 7
+
+
+def test_select_split_group_requires_group_column():
+    df = _split_frame()
+    args = build_parser().parse_args(
+        ["--split", "group", "--group-col", "missing_column"]
+    )
+    with pytest.raises(ValueError, match="group column"):
+        _select_split(df, args, "t")
 
 
 # ---------------------------------------------------------------------------

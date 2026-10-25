@@ -1,5 +1,8 @@
 data: data/residual_table.csv
 time_col: t
+split: random
+group_col: arc_id
+seed: 0
 engineer: true
 test_fraction: 0.2
 epochs: 50

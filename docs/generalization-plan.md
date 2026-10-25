@@ -1,5 +1,14 @@
 # Generalization Plan
 
+## Status
+
+- P0 split modes are implemented in `ml/pinn/run.py`: `--split random`,
+  `--split time`, and `--split group --group-col arc_id`, with `--seed` and
+  split metadata written into the result JSON.
+- Still open: multi-seed aggregation, temporal/grouped re-evaluation of the
+  existing checkpoints, data provenance, state-based features, and the
+  acceleration-residual model.
+
 ## Goal
 
 Move the residual-correction model from fitting one 30-day Moon arc to producing

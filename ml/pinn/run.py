@@ -14,6 +14,7 @@ try:
         build_xy,
         load_residual_table,
         resolve_times,
+        split_by_time,
     )
     from .features import engineer_features
     from .pinn import PINN, train_pinn
@@ -24,6 +25,7 @@ except ImportError:
         build_xy,
         load_residual_table,
         resolve_times,
+        split_by_time,
     )
     from features import engineer_features
     from pinn import PINN, train_pinn
@@ -68,21 +70,138 @@ def _eval(model, X, Y, predict=None):
     return mse, r2
 
 
+def _time_range(df, time_col):
+    """Return ``[min, max]`` for the sample-time column, or ``None``."""
+    if df is None or time_col is None or time_col not in df.columns or len(df) == 0:
+        return None
+    values = [float(value) for value in df[time_col].tolist()]
+    return [min(values), max(values)]
+
+
+def _select_split(df, args, time_col):
+    """Split a residual table according to ``args.split``.
+
+    Returns ``(df_train, df_test, metadata)``.  ``random`` preserves the
+    historical interpolation split, ``time`` holds out the latest samples, and
+    ``group`` holds out whole arcs so neighboring rows cannot leak across the
+    split.  The metadata is stored next to the metrics so a reported score can
+    be reproduced and interpreted.
+    """
+    n = len(df)
+    if n == 0:
+        raise ValueError("cannot split an empty residual table")
+    test_fraction = float(args.test_fraction)
+    mode = getattr(args, "split", "random")
+    seed = int(getattr(args, "seed", 0))
+    metadata = {
+        "mode": mode,
+        "seed": seed,
+        "test_fraction": test_fraction,
+        "n_samples": n,
+    }
+
+    if mode == "random":
+        order = list(range(n))
+        random.Random(seed).shuffle(order)
+        n_train = int(n * (1.0 - test_fraction))
+        if test_fraction > 0.0 and n > 1:
+            n_train = max(1, min(n - 1, n_train))
+        train_idx = order[:n_train]
+        test_idx = order[n_train:]
+        metadata["split_unit"] = "row"
+
+    elif mode == "time":
+        times = resolve_times(df, time_col)
+        if times is None:
+            raise ValueError("--split time requires a time column")
+        row_ids = [[index] for index in range(n)]
+        train_rows, test_rows, _, _ = split_by_time(
+            row_ids, row_ids, t=times, test_fraction=test_fraction
+        )
+        train_idx = [int(row[0]) for row in train_rows]
+        test_idx = [int(row[0]) for row in test_rows]
+        metadata["split_unit"] = "time"
+        metadata["sort_column"] = time_col
+
+    elif mode == "group":
+        group_col = getattr(args, "group_col", "arc_id")
+        if not group_col or group_col not in df.columns:
+            raise ValueError(
+                f"--split group requires a group column; "
+                f"{group_col!r} is not in the table"
+            )
+        groups = sorted({str(value) for value in df[group_col].tolist()})
+        if len(groups) < 2:
+            raise ValueError(
+                f"--split group needs at least two groups in {group_col!r}"
+            )
+        shuffled = list(groups)
+        random.Random(args.seed).shuffle(shuffled)
+        n_test_groups = max(1, round(len(groups) * test_fraction))
+        n_test_groups = min(n_test_groups, len(groups) - 1)
+        test_groups = set(shuffled[:n_test_groups])
+        train_groups = set(shuffled[n_test_groups:])
+        values = [str(value) for value in df[group_col].tolist()]
+        train_idx = [
+            index for index, value in enumerate(values) if value in train_groups
+        ]
+        test_idx = [
+            index for index, value in enumerate(values) if value in test_groups
+        ]
+        metadata["split_unit"] = "group"
+        metadata["group_column"] = group_col
+        metadata["train_groups"] = sorted(train_groups)
+        metadata["test_groups"] = sorted(test_groups)
+
+    else:  # pragma: no cover - argparse restricts the choices
+        raise ValueError(f"unknown split mode: {mode!r}")
+
+    if not train_idx or not test_idx:
+        raise ValueError(
+            f"--split {mode} produced an empty train or test set "
+            f"({len(train_idx)} train, {len(test_idx)} test)"
+        )
+
+    df_train = df.iloc[train_idx].reset_index(drop=True)
+    df_test = df.iloc[test_idx].reset_index(drop=True)
+    metadata.update(
+        {
+            "n_train": len(df_train),
+            "n_test": len(df_test),
+            "train_row_fraction": len(df_train) / n,
+            "test_row_fraction": len(df_test) / n,
+            "train_time_range_s": _time_range(df_train, time_col),
+            "test_time_range_s": _time_range(df_test, time_col),
+        }
+    )
+    return df_train, df_test, metadata
+
+
 def run(args) -> tuple:
-    random.seed(0)
+    seed = int(getattr(args, "seed", 0))
+    random.seed(seed)
     try:
         import torch
 
-        torch.manual_seed(0)
+        torch.manual_seed(seed)
     except ImportError:
         pass
     try:
         import numpy as np
 
-        np.random.seed(0)
+        np.random.seed(seed)
     except ImportError:
         pass
     mission = load_mission(args.mission) if args.mission else None
+    split_meta = {
+        "mode": "synthetic",
+        "seed": seed,
+        "test_fraction": float(args.test_fraction),
+        "n_samples": 12,
+        "n_train": 12,
+        "n_test": 0,
+        "split_unit": "row",
+    }
 
     if args.data:
         df = load_residual_table(args.data)
@@ -115,16 +234,10 @@ def run(args) -> tuple:
         # training. E.g. --targets y -> pos_cols has 1 col -> vel_cols = ["dvx"].
         vel_cols = ["dvx", "dvy", "dvz"][: len(pos_cols)]
 
-        # Random (interpolation) split by default; keeps temporal split available
-        # via split_by_time for extrapolation evaluation.
-        test_fraction = float(args.test_fraction)
-        n_train = int(len(df) * (1 - test_fraction))
-        perm = list(range(len(df)))
-        random.Random(0).shuffle(perm)
-        train_idx = perm[:n_train]
-        test_idx = perm[n_train:]
-        df_train = df.iloc[train_idx].reset_index(drop=True)
-        df_test = df.iloc[test_idx].reset_index(drop=True)
+        # Split the table according to --split.  Random is the historical
+        # interpolation split; time and group hold out whole tails/arcs so the
+        # reported score measures transfer rather than memorization.
+        df_train, df_test, split_meta = _select_split(df, args, time_col)
 
         # Scalers
         scaler_pos = StandardScaler()
@@ -466,6 +579,11 @@ def run(args) -> tuple:
     results = {
         "n_samples": len(df) if df is not None else 12,
         "masked_fraction": masked_frac,
+        "seed": seed,
+        "split": split_meta,
+        "feature_columns": feature_cols if df is not None else None,
+        "target_columns": pos_cols,
+        "time_column": time_col if df is not None else None,
         "pinn": {
             "train_mse": pinn_train_mse,
             "train_r2": pinn_train_r2,
@@ -517,6 +635,24 @@ def build_parser():
     parser.add_argument("--targets", default=None)
     parser.add_argument("--mission", default=None)
     parser.add_argument("--time-col", default=None)
+    parser.add_argument(
+        "--split",
+        choices=("random", "time", "group"),
+        default="random",
+        help="random = interpolation split, time = hold out the latest samples, "
+        "group = hold out whole groups (arcs)",
+    )
+    parser.add_argument(
+        "--group-col",
+        default="arc_id",
+        help="column used by --split group",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="seed for the split and model initialisation",
+    )
     parser.add_argument("--engineer", action="store_true")
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--lr", type=float, default=1e-3)

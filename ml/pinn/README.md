@@ -28,6 +28,21 @@ Run:
         --features x0,x1 --targets drx,dry,drz --test-fraction 0.2 \
         --out ml/pinn/pinn_result.json
 
+Split modes:
+    # Random interpolation split (historical default, useful for comparison)
+    python -m ml.pinn.run --data data/residual_table.csv --split random
+
+    # Hold out the latest samples instead of random rows
+    python -m ml.pinn.run --data data/residual_table.csv --split time
+
+    # Hold out whole arcs so neighboring rows cannot leak across the split
+    python -m ml.pinn.run --data data/multi_arc.csv --split group \
+        --group-col arc_id --seed 0
+
+`--seed` controls the split and model initialisation.  The result JSON records
+the split mode, seed, row counts, per-split time ranges, and held-out group IDs,
+so an interpolation score cannot be mistaken for a temporal or mission holdout.
+
 Dataset helpers:
     from ml.pinn.dataset import load_residual_table, build_xy, split_by_time
     df = load_residual_table("residual_table.parquet")

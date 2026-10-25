@@ -10,7 +10,7 @@ Usage:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 try:
     import yaml
@@ -29,6 +29,9 @@ class PipelineConfig(BaseModel):
     targets: str | None = None
     mission: str | None = None
     time_col: str | None = None
+    split: Literal["random", "time", "group"] = "random"
+    group_col: str = "arc_id"
+    seed: int = 0
     test_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
     epochs: int = Field(default=150, ge=1)
     lr: float = Field(default=5e-2, gt=0.0)
@@ -62,6 +65,9 @@ class PipelineConfig(BaseModel):
             argv += ["--mission", self.mission]
         if self.time_col:
             argv += ["--time-col", self.time_col]
+        argv += ["--split", self.split]
+        argv += ["--group-col", self.group_col]
+        argv += ["--seed", str(self.seed)]
         argv += ["--test-fraction", str(self.test_fraction)]
         argv += ["--epochs", str(self.epochs)]
         argv += ["--lr", str(self.lr)]
