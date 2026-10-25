@@ -33,22 +33,6 @@ const provenanceEl = document.getElementById("provenance");
 const orbitSlider = document.getElementById("orbit-slider");
 const orbitPlayBtn = document.getElementById("orbit-play");
 const orbitTimeEl = document.getElementById("orbit-time");
-const missionDot = document.getElementById("mission-dot");
-const missionStatus = document.getElementById("mission-status");
-const missionSummary = document.getElementById("mission-summary");
-const missionCenterSel = document.getElementById("mission-center");
-const missionDurationEl = document.getElementById("mission-duration");
-const missionDurationUnit = document.getElementById("mission-duration-unit");
-const missionRunBtn = document.getElementById("mission-run");
-const missionRestoreBtn = document.getElementById("mission-restore");
-const missionAddBurnBtn = document.getElementById("mission-add-burn");
-const missionBurnsEl = document.getElementById("mission-burns");
-const missionPositionInputs = ["rx", "ry", "rz"].map((id) =>
-  document.getElementById(`mission-${id}`)
-);
-const missionVelocityInputs = ["vx", "vy", "vz"].map((id) =>
-  document.getElementById(`mission-${id}`)
-);
 const showRefCb = document.getElementById("show-ref");
 const showPropCb = document.getElementById("show-prop");
 const showCorrCb = document.getElementById("show-corr");
@@ -81,7 +65,6 @@ let orbitAcc = 0;
 let traveledLine = null;
 let traveledTubeRef = null;
 let trajectoryData = null;
-let trajectorySource = "bundle"; // "bundle" | "mission"
 let trajRadius = 0;
 let orbitPlane = null;
 let ensembleEpoch = -1;
@@ -246,7 +229,7 @@ scene.add(halo);
    it far outside the lunar scene, so the marker is placed on a compressed
    radius along the true Earth->Sun direction; the label spells that out.  The
    directional light follows the same vector, so Earth's phase matches. */
-const SUN_MARKER_DISTANCE = 1.45; // multiples of the trajectory radius
+const SUN_MARKER_DISTANCE = 1.45; // compressed multiples of the trajectory radius, from Earth
 let sunDirections = null; // per-sample unit vectors from the bundle
 let sunRangeKm = null; // per-sample Earth-Sun range
 let sunAvailable = false;
@@ -388,41 +371,6 @@ moonGroup.add(moonGlow);
 const moonLabel = labelSprite("MOON", "", "226,232,240");
 moonGroup.add(moonLabel);
 
-/* Mission marker.  A live mission's moving body is the spacecraft, not the
-   Moon, so it gets its own group and the lunar reference view stays unchanged. */
-const craftGroup = new THREE.Group();
-craftGroup.name = "craft-marker";
-craftGroup.visible = false;
-scene.add(craftGroup);
-
-const craftBody = new THREE.Mesh(
-  new THREE.SphereGeometry(1, 24, 24),
-  new THREE.MeshStandardMaterial({
-    color: 0x22d3ee,
-    emissive: 0x0e7490,
-    emissiveIntensity: 1.4,
-    roughness: 0.35,
-    metalness: 0.2,
-  })
-);
-craftGroup.add(craftBody);
-
-const craftGlow = new THREE.Sprite(
-  new THREE.SpriteMaterial({
-    map: radialSpriteTexture(),
-    color: 0x22d3ee,
-    transparent: true,
-    opacity: 0.7,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    fog: false,
-  })
-);
-craftGroup.add(craftGlow);
-
-const craftLabel = labelSprite("CRAFT", "", "165,243,252");
-craftGroup.add(craftLabel);
-
 /* Static starfield: the guide renderer paints stars, and they make the
    lunar-scale scene read as space rather than a CAD viewport. */
 function makeStarField() {
@@ -549,9 +497,9 @@ function updateSunGeometry(radius) {
   sunLabel.scale.set(R * 0.22, R * 0.11, 1);
   sunLabel.position.set(0, R * 0.115, 0);
   if (!sunDirection) return;
-  sunGroup.position.copy(sunDirection).multiplyScalar(R * SUN_MARKER_DISTANCE);
-  sunLight.position.copy(sunDirection).multiplyScalar(R * 3);
-  sunBeam.geometry.setFromPoints([new THREE.Vector3(), sunGroup.position.clone()]);
+  sunGroup.position.copy(earth.position).addScaledVector(sunDirection, R * SUN_MARKER_DISTANCE);
+  sunLight.position.copy(earth.position).addScaledVector(sunDirection, R * 3);
+  sunBeam.geometry.setFromPoints([earth.position.clone(), sunGroup.position.clone()]);
   sunBeam.material.dashSize = R * 0.008;
   sunBeam.material.gapSize = R * 0.008;
   sunBeam.computeLineDistances();
@@ -596,13 +544,11 @@ function applySunSample(index) {
 
 function setOrbitPropsVisible() {
   const hasPath = !!trajectoryData?.points?.length;
-  const missionMode = trajectorySource === "mission";
   sunGroup.visible = !!showSunCb?.checked && sunAvailable;
   sunBeam.visible = sunGroup.visible;
   starGroup.visible = true;
   earthLabel.visible = true;
-  moonGroup.visible = !missionMode && hasPath;
-  craftGroup.visible = missionMode && hasPath;
+  moonGroup.visible = hasPath;
   requestRender();
 }
 
@@ -700,281 +646,7 @@ function fileError(prefix, path, error) {
   return `${prefix}: ${path} (${detail})`;
 }
 
-/* ---------------- mission runner ----------------
-   The form is the front end of `propagate_mission`: the Tauri backend runs the
-   Rust Dormand-Prince core and returns the same `points`/`times` shape as the
-   static bundle, so `applyTrajectoryBundle` can draw both. */
-const MISSION_STORAGE_KEY = "residual-mission";
-const MISSION_PRESETS = {
-  leo: {
-    center: "earth",
-    duration: 2,
-    unit: 3600,
-    r: [6778.137, 0, 0],
-    v: [0, 7.6686, 0],
-    burns: [],
-  },
-  tli: {
-    center: "earth",
-    duration: 3,
-    unit: 86400,
-    r: [6778.137, 0, 0],
-    v: [0, 10.75, 0],
-    burns: [],
-  },
-};
-
-function fmtKm(km) {
-  if (!Number.isFinite(km)) return "—";
-  if (Math.abs(km) >= 100_000) return `${Math.round(km / 1000)}k km`;
-  return `${Math.round(km).toLocaleString()} km`;
-}
-
-function syncBurnEmptyNote() {
-  if (!missionBurnsEl) return;
-  const rows = missionBurnsEl.querySelectorAll(".mission-burn-row");
-  let note = missionBurnsEl.querySelector(".mission-burn-empty");
-  if (rows.length === 0 && !note) {
-    note = document.createElement("p");
-    note.className = "mission-burn-empty";
-    note.textContent = "No burns — pure coast.";
-    missionBurnsEl.appendChild(note);
-  } else if (rows.length > 0 && note) {
-    note.remove();
-  }
-}
-
-function addMissionBurnRow(burn = null) {
-  if (!missionBurnsEl) return;
-  const row = document.createElement("div");
-  row.className = "mission-burn-row";
-  const fields = [
-    ["t", "t (s)", burn?.t_s],
-    ["dvx", "Δvx", burn?.dv_m_s?.[0]],
-    ["dvy", "Δvy", burn?.dv_m_s?.[1]],
-    ["dvz", "Δvz", burn?.dv_m_s?.[2]],
-  ];
-  for (const [key, label, value] of fields) {
-    const input = document.createElement("input");
-    input.type = "number";
-    input.step = "any";
-    input.className = "settings-input";
-    input.dataset.burn = key;
-    input.placeholder = label;
-    input.setAttribute("aria-label", label);
-    if (value != null && Number.isFinite(Number(value))) input.value = String(value);
-    row.appendChild(input);
-  }
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "mission-burn-remove";
-  remove.textContent = "✕";
-  remove.setAttribute("aria-label", "Remove burn");
-  remove.addEventListener("click", () => {
-    row.remove();
-    syncBurnEmptyNote();
-  });
-  row.appendChild(remove);
-  missionBurnsEl.appendChild(row);
-  syncBurnEmptyNote();
-}
-
-function fillMissionForm(preset) {
-  if (missionCenterSel) missionCenterSel.value = preset.center || "earth";
-  if (missionDurationEl) missionDurationEl.value = String(preset.duration);
-  if (missionDurationUnit) missionDurationUnit.value = String(preset.unit);
-  missionPositionInputs.forEach((el, i) => {
-    if (el) el.value = String(preset.r[i]);
-  });
-  missionVelocityInputs.forEach((el, i) => {
-    if (el) el.value = String(preset.v[i]);
-  });
-  if (missionBurnsEl) missionBurnsEl.innerHTML = "";
-  for (const burn of preset.burns || []) addMissionBurnRow(burn);
-  syncBurnEmptyNote();
-}
-
-function readMissionForm() {
-  const number = (el, label) => {
-    const value = Number(el?.value);
-    if (!Number.isFinite(value)) throw new Error(`${label} must be a number`);
-    return value;
-  };
-  const duration =
-    number(missionDurationEl, "duration") * (Number(missionDurationUnit?.value) || 1);
-  if (!(duration > 0)) throw new Error("duration must be positive");
-
-  const position_km = missionPositionInputs.map((el, i) => number(el, `r${"xyz"[i]}`));
-  const velocity_km_s = missionVelocityInputs.map((el, i) => number(el, `v${"xyz"[i]}`));
-
-  const burns = [];
-  const rows = missionBurnsEl
-    ? Array.from(missionBurnsEl.querySelectorAll(".mission-burn-row"))
-    : [];
-  for (const row of rows) {
-    const values = ["t", "dvx", "dvy", "dvz"].map(
-      (key) => row.querySelector(`[data-burn="${key}"]`)?.value ?? ""
-    );
-    if (values.every((value) => String(value).trim() === "")) continue;
-    const [t, dvx, dvy, dvz] = values.map(Number);
-    if (![t, dvx, dvy, dvz].every(Number.isFinite)) {
-      throw new Error("burn fields must be numbers");
-    }
-    burns.push({ t_s: t, dv_m_s: [dvx, dvy, dvz] });
-  }
-  if (burns.length > 8) throw new Error("at most 8 impulsive burns");
-
-  return {
-    name: "UI mission",
-    center: missionCenterSel?.value === "barycentric" ? "barycentric" : "earth",
-    position_km,
-    velocity_km_s,
-    duration_s: duration,
-    samples: 1200,
-    start_epoch_s: 0,
-    burns,
-  };
-}
-
-function saveMissionForm() {
-  try {
-    const burns = missionBurnsEl
-      ? Array.from(missionBurnsEl.querySelectorAll(".mission-burn-row"))
-          .map((row) => {
-            const read = (key) => row.querySelector(`[data-burn="${key}"]`)?.value ?? "";
-            return { t: read("t"), dvx: read("dvx"), dvy: read("dvy"), dvz: read("dvz") };
-          })
-          .filter((row) => [row.t, row.dvx, row.dvy, row.dvz].some((v) => String(v).trim() !== ""))
-      : [];
-    localStorage.setItem(
-      MISSION_STORAGE_KEY,
-      JSON.stringify({
-        center: missionCenterSel?.value || "earth",
-        duration: missionDurationEl?.value ?? "2",
-        unit: missionDurationUnit?.value ?? "3600",
-        r: missionPositionInputs.map((el) => el?.value ?? ""),
-        v: missionVelocityInputs.map((el) => el?.value ?? ""),
-        burns,
-      })
-    );
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-function restoreMissionForm() {
-  let saved = null;
-  try {
-    saved = JSON.parse(localStorage.getItem(MISSION_STORAGE_KEY) || "null");
-  } catch {
-    saved = null;
-  }
-  if (!saved || !Array.isArray(saved.r) || !Array.isArray(saved.v)) {
-    fillMissionForm(MISSION_PRESETS.leo);
-    return;
-  }
-  if (missionCenterSel) missionCenterSel.value = saved.center || "earth";
-  if (missionDurationEl) missionDurationEl.value = String(saved.duration ?? "2");
-  if (missionDurationUnit) missionDurationUnit.value = String(saved.unit ?? "3600");
-  missionPositionInputs.forEach((el, i) => {
-    if (el) el.value = String(saved.r[i] ?? "");
-  });
-  missionVelocityInputs.forEach((el, i) => {
-    if (el) el.value = String(saved.v[i] ?? "");
-  });
-  if (missionBurnsEl) missionBurnsEl.innerHTML = "";
-  for (const burn of saved.burns || []) {
-    addMissionBurnRow({ t_s: burn.t, dv_m_s: [burn.dvx, burn.dvy, burn.dvz] });
-  }
-  syncBurnEmptyNote();
-}
-
-async function runMission() {
-  if (!hasBackend) {
-    setDot(missionDot, "err");
-    if (missionStatus) missionStatus.textContent = "Mission runner needs the Tauri desktop backend.";
-    if (missionSummary) {
-      missionSummary.textContent = "Launch the desktop build (npm run dev in tauri-src) to propagate in-app.";
-    }
-    return;
-  }
-
-  let request;
-  try {
-    request = readMissionForm();
-  } catch (error) {
-    const detail = error?.message || String(error);
-    setDot(missionDot, "err");
-    if (missionStatus) missionStatus.textContent = detail;
-    return;
-  }
-
-  if (missionRunBtn) missionRunBtn.disabled = true;
-  setDot(missionDot, "loading");
-  if (missionStatus) missionStatus.textContent = "Propagating…";
-  const started = performance.now();
-  try {
-    const data = await invokeCmd("propagate_mission", { request });
-    applyTrajectoryBundle(data, { source: "mission" });
-    const elapsed = performance.now() - started;
-    const stats = data.stats || {};
-    if (missionStatus) {
-      missionStatus.textContent = `Live mission · ${data.frame || "earth-centered-inertial"}`;
-    }
-    if (missionSummary) {
-      missionSummary.textContent = [
-        `${data.count ?? 0} samples`,
-        `${fmtKm(stats.min_radius_km)} – ${fmtKm(stats.max_radius_km)} radius`,
-        `${Math.round(elapsed)} ms`,
-      ].join(" · ");
-    }
-    setDot(missionDot, "ok");
-    saveMissionForm();
-  } catch (error) {
-    const detail = typeof error === "string" ? error : error?.message || String(error);
-    if (missionStatus) missionStatus.textContent = `Mission failed — ${detail}`;
-    if (missionSummary) {
-      missionSummary.textContent = "Check the state vector, duration, and burn times.";
-    }
-    setDot(missionDot, "err");
-    showError(`Mission: ${detail}`);
-  } finally {
-    if (missionRunBtn) missionRunBtn.disabled = false;
-  }
-}
-
-function setupMissionUI() {
-  missionRunBtn?.addEventListener("click", runMission);
-  missionRestoreBtn?.addEventListener("click", async () => {
-    setDot(missionDot, "loading");
-    if (missionStatus) missionStatus.textContent = "Loading bundled reference…";
-    await loadTrajectory();
-    if (trajectoryLoaded) {
-      setDot(missionDot, "");
-      if (missionStatus) missionStatus.textContent = "Bundled reference loaded.";
-      if (missionSummary) {
-        missionSummary.textContent = "Runs the Rust Dormand–Prince core. Earth-centred by default.";
-      }
-    } else {
-      setDot(missionDot, "err");
-    }
-  });
-  missionAddBurnBtn?.addEventListener("click", () => addMissionBurnRow());
-  document.querySelectorAll("[data-preset]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const preset = MISSION_PRESETS[btn.dataset.preset];
-      if (!preset) return;
-      fillMissionForm(preset);
-      saveMissionForm();
-      setDot(missionDot, "");
-      if (missionStatus) missionStatus.textContent = "Preset loaded — press Run mission.";
-    });
-  });
-  document.getElementById("mission-card")?.addEventListener("change", saveMissionForm);
-}
-
-/* Tear down the previous path and reset the per-bundle view state.  Shared by
-   the static bundle loader and the live mission runner. */
+/* Tear down the previous path and reset the bundled view state. */
 function resetTrajectoryScene() {
   const card = document.getElementById("trajectory-card");
   card?.querySelectorAll(".fallback-note").forEach((n) => n.remove());
@@ -991,7 +663,6 @@ function resetTrajectoryScene() {
   traveledTubeRef = null;
   ensembleEpoch = -1;
   moonGroup.visible = false;
-  craftGroup.visible = false;
   sunAvailable = false;
   sunDirections = null;
   sunRangeKm = null;
@@ -1023,7 +694,6 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
   const points = rawPoints.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
   if (points.length < 2) throw new Error("Not enough trajectory samples");
   trajectoryData = data;
-  trajectorySource = source;
 
   // Sun direction track (optional; bundles built before it existed omit it).
   sunDirections =
@@ -1148,8 +818,7 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
     trajGroup.add(line);
   }
 
-  // A live mission has no residual overlays or ensemble cloud.  Disable the
-  // controls instead of leaving toggles that silently do nothing.
+  // Disable overlay controls when their optional data is absent.
   const hasPropOverlay =
     Array.isArray(data.points_propagated) && data.points_propagated.length >= 2;
   const hasCorrOverlay =
@@ -1162,17 +831,8 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
     showCorrCb.disabled = !hasCorrOverlay;
     if (!hasCorrOverlay) showCorrCb.checked = false;
   }
-  const missionMode = source === "mission";
-  if (showEnsembleCb) {
-    showEnsembleCb.disabled = missionMode;
-    if (missionMode) showEnsembleCb.checked = false;
-  }
-  if (ensembleSlider) ensembleSlider.disabled = missionMode;
-  if (missionMode && ensembleInfo) ensembleInfo.textContent = "not available for live missions";
-
-  // Moon marker at the current epoch (the craft marker in mission mode).
-  moonGroup.position.copy(points[0]);
-  craftGroup.position.copy(points[0]);
+  if (showEnsembleCb) showEnsembleCb.disabled = false;
+  if (ensembleSlider) ensembleSlider.disabled = false;
 
   // slider range
   if (orbitSlider) { orbitSlider.max = String(Math.max(points.length - 1, 1)); orbitSlider.value = "0"; }
@@ -1185,8 +845,8 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
   trajKv.innerHTML = "";
   const kvPairs = [
     ["Samples", points.length],
-    ["Source", missionMode ? `live ${data.name || "mission"}` : "bundle"],
-    ["Frame", data.frame || (missionMode ? "earth-centered-inertial" : "barycentric")],
+    ["Source", "bundle"],
+    ["Frame", data.frame || "barycentric"],
     ["Max radius", fmt(maxR, 1)],
     ["Min radius", fmt(minR, 1)],
     [
@@ -1214,9 +874,7 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
     trajKv.appendChild(dt); trajKv.appendChild(dd);
   }
 
-  trajStatus.textContent = missionMode
-    ? `Live mission · ${points.length} samples`
-    : `${points.length} samples loaded`;
+  trajStatus.textContent = `${points.length} samples loaded`;
   setDot(trajDot, "ok");
 
   // strip metric
@@ -1226,16 +884,9 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
 
   trajectoryLoaded = true;
   trajectoryFailed = false;
-  if (source === "mission") {
-    provenanceEl.textContent = `Live mission · ${data.schema || "mission-trajectory"} · Rust Dormand–Prince (Earth–Moon)`;
-    if (sceneCaption) {
-      sceneCaption.textContent = `${data.frame || "earth-centered-inertial"} · live propagation · bodies enlarged, not to scale`;
-    }
-  } else {
-    updateProvenance();
-    if (sceneCaption) {
-      sceneCaption.textContent = "Bodies and Sun enlarged · distances compressed · not to scale";
-    }
+  updateProvenance();
+  if (sceneCaption) {
+    sceneCaption.textContent = "Bodies and Sun enlarged · distances compressed · not to scale";
   }
   setOrbitPropsVisible();
   fitCameraToTrajectory(maxR);
@@ -1246,14 +897,13 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
 async function loadTrajectory() {
   const src = settings.trajectoryPath || "./data/trajectory.json";
   trajectoryLoaded = false;
-  trajectorySource = "bundle";
   resetTrajectoryScene();
   setDot(trajDot, "loading");
   try {
     const response = await fetch(src);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    applyTrajectoryBundle(data, { source: "bundle" });
+    applyTrajectoryBundle(data);
     settle();
   } catch (error) {
     const message = fileError("Trajectory data unavailable", src, error);
@@ -1401,9 +1051,6 @@ function orbitIndexForEnsembleEpoch(epoch) {
 }
 
 function syncEnsembleToOrbit(idx) {
-  // The ensemble is sampled on the bundled arc's epoch grid, so it has no
-  // meaning while a live mission owns the scene.
-  if (trajectorySource === "mission") return;
   if (!ensembleData) return;
   const epoch = ensembleEpochForOrbitIndex(idx);
   if (ensembleSlider) ensembleSlider.value = String(epoch);
@@ -1430,8 +1077,6 @@ function ensembleRmsKm(epoch) {
 
 function renderEnsembleEpoch(idx, { force = false } = {}) {
   if (!ensembleData) return;
-  // The cloud is sampled on the static arc; never overlay it on a mission.
-  if (trajectorySource === "mission") return;
   const last = ensembleEpochCount();
   idx = Math.max(0, Math.min(last, idx | 0));
   const t = ensembleData.epochs_s?.[idx] ?? idx;
@@ -1581,6 +1226,18 @@ function drawResidual() {
   residualChart = { rows, xOf, yOf, tMin, tMax };
 }
 
+function earthMoonPositions(idx) {
+  const moon = trajectoryData?.points?.[idx] ?? [0, 0, 0];
+  // `points` are already the canonical barycentric Moon reference positions.
+  // Derive Earth's matching barycentric position from the mass ratio instead
+  // of consuming stale/misaligned per-body arrays in older generated bundles.
+  const earthToMoonMassRatio = 4.9048695e12 / 3.986004418e14;
+  return {
+    earth: moon.map((value) => -earthToMoonMassRatio * value),
+    moon,
+  };
+}
+
 function drawGuide(idx) {
   if (!guideCanvas) return;
   const ctx = guideCanvas.getContext("2d");
@@ -1589,37 +1246,14 @@ function drawGuide(idx) {
   if (!trajectoryData?.points?.length) return;
   const pts = trajectoryData.points;
   const i = Math.max(0, Math.min(pts.length - 1, idx ?? 0));
-  const missionMode = trajectorySource === "mission";
-  const earthCentered =
-    missionMode && (trajectoryData.frame || "earth-centered-inertial") === "earth-centered-inertial";
-
-  // Analytic Earth/Moon positions at this sample's absolute time, kilometres.
-  // The bundled arc is barycentric, so it carries an Earth offset; a live
-  // Earth-centred mission puts Earth at the origin and only shifts the Moon.
-  const MU_E = 3.986004418e14, MU_M = 4.9048695e12, D = 3.844e8;
-  const total = MU_E + MU_M;
-  const relativeT = Array.isArray(trajectoryData.times) ? Number(trajectoryData.times[i]) : i;
-  const absoluteT =
-    Array.isArray(trajectoryData.times_absolute) && trajectoryData.times_absolute.length
-      ? Number(trajectoryData.times_absolute[i])
-      : (Number(trajectoryData.start_epoch_s) || 0) + relativeT;
-  const theta = Math.sqrt(total / (D * D * D)) * absoluteT;
-  const mf = MU_M / total;
-  const c = Math.cos(theta), s = Math.sin(theta);
-  const earth3 = earthCentered
-    ? [0, 0, 0]
-    : [-D * mf * c / 1000, -D * mf * s / 1000, 0];
-  const moon3 = earthCentered
-    ? [D * c / 1000, D * s / 1000, 0]
-    : [D * (1 - mf) * c / 1000, D * (1 - mf) * s / 1000, 0];
+  const { earth: earth3, moon: moon3 } = earthMoonPositions(i);
 
   // pick the two axes that actually span the orbit (this dataset is XY, not XZ)
   const ax = orbitPlane?.a ?? 0;
   const bx = orbitPlane?.b ?? 2;
   const proj = (p) => [p[ax], p[bx]];
 
-  // Frame the full path, as the Python guide renderer does. A remote Moon is
-  // omitted for Earth-centred live missions to preserve the useful arc scale.
+  // Frame the full path and both bodies, as the Python guide renderer does.
   const boundsOf = (list) => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of list) {
@@ -1631,16 +1265,13 @@ function drawGuide(idx) {
   const reference2 = pts.map(proj);
   const path = [...reference2];
   const corr = trajectoryData.points_corrected;
-  const showCorrected = Array.isArray(corr) && corr.length && !missionMode && (showCorrCb?.checked ?? false);
+  const showCorrected = Array.isArray(corr) && corr.length && (showCorrCb?.checked ?? false);
   if (showCorrected) for (const p of corr) path.push(proj(p));
   let box = boundsOf([...path, proj(earth3)]);
   const cx0 = (box.minX + box.maxX) / 2;
   const cy0 = (box.minY + box.maxY) / 2;
-  const pathRadius = Math.hypot(box.maxX - box.minX, box.maxY - box.minY) / 2 || 1;
   const moon2 = proj(moon3);
-  const showMoon =
-    !missionMode || Math.hypot(moon2[0] - cx0, moon2[1] - cy0) <= pathRadius * 1.6;
-  if (showMoon) box = boundsOf([...path, proj(earth3), moon2]);
+  box = boundsOf([...path, proj(earth3), moon2]);
   const cx = (box.minX + box.maxX) / 2;
   const cy = (box.minY + box.maxY) / 2;
   const pad = 20;
@@ -1685,17 +1316,15 @@ function drawGuide(idx) {
   ctx.fillStyle = "#285fca";
   ctx.beginPath(); ctx.arc(ep[0], ep[1], 5.5, 0, Math.PI*2); ctx.fill();
 
-  // moon (may sit outside the framed path and be omitted)
-  if (showMoon) {
-    const mp = px(moon2);
-    ctx.fillStyle = "rgba(203,213,225,0.22)";
-    ctx.beginPath(); ctx.arc(mp[0], mp[1], 7, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = "#b7bcc4";
-    ctx.beginPath(); ctx.arc(mp[0], mp[1], 3.5, 0, Math.PI*2); ctx.fill();
-  }
+  // Moon marker and label share the trajectory's canonical Moon coordinates.
+  const mp = px(moon2);
+  ctx.fillStyle = "rgba(203,213,225,0.22)";
+  ctx.beginPath(); ctx.arc(mp[0], mp[1], 7, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "#b7bcc4";
+  ctx.beginPath(); ctx.arc(mp[0], mp[1], 3.5, 0, Math.PI*2); ctx.fill();
 
   // sun bearing (the real Sun is ~1 AU out, so only the direction fits)
-  if (sunAvailable && Array.isArray(sunDirections) && sunDirections.length) {
+  if (Array.isArray(sunDirections) && sunDirections.length) {
     const d3 = sunDirections[Math.min(i, sunDirections.length - 1)];
     const d2 = d3 ? proj(d3) : null;
     const dlen = d2 ? Math.hypot(d2[0], d2[1]) : 0;
@@ -1710,31 +1339,24 @@ function drawGuide(idx) {
       ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
       ctx.fillStyle = "#fde68a";
-      ctx.beginPath(); ctx.arc(x1, y1, 3, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = "rgba(253,230,138,0.85)";
-      ctx.font = "10px sans-serif";
-      ctx.fillText("Sun", x1 + 5, y1 + 3);
+      ctx.beginPath(); ctx.arc(x1, y1, 4, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#fde68a";
+      ctx.font = "600 10px sans-serif";
+      ctx.fillText("SUN", x1 + 7, y1 - 5);
     }
   }
 
-  // current body: the spacecraft in both modes, cyan for live missions
+  // Current trajectory object.
   const sp = px(proj(pts[i]));
-  ctx.fillStyle = missionMode ? "rgba(34,211,238,0.22)" : "rgba(245,158,11,0.24)";
+  ctx.fillStyle = "rgba(245,158,11,0.24)";
   ctx.beginPath(); ctx.arc(sp[0], sp[1], 9, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = missionMode ? "#22d3ee" : "#ff9b35";
+  ctx.fillStyle = "#ff9b35";
   ctx.beginPath(); ctx.arc(sp[0], sp[1], 4, 0, Math.PI*2); ctx.fill();
 
   // labels
   ctx.fillStyle = "#cbd5e1"; ctx.font = "600 10px sans-serif";
   ctx.fillText("EARTH", ep[0]+9, ep[1]-7);
-  if (showMoon) {
-    const mp = px(moon2);
-    ctx.fillText("MOON", mp[0]+7, mp[1]-5);
-  }
-  if (missionMode) {
-    ctx.fillStyle = "#a5f3fc";
-    ctx.fillText("CRAFT", sp[0] + 7, sp[1] - 7);
-  }
+  ctx.fillText("MOON", mp[0]+7, mp[1]-5);
 
   // Small legend echoes the reference renderer's color roles.
   const legendY = H - 10;
@@ -1925,8 +1547,12 @@ function setOrbitIndex(idx, { syncEnsemble = true } = {}) {
   if (!pts.length) return 0;
   idx = Math.max(0, Math.min(pts.length - 1, idx | 0));
   if (orbitSlider) orbitSlider.value = String(idx);
-  moonGroup.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
-  craftGroup.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
+  const { earth: earthPosition, moon: moonPosition } = earthMoonPositions(idx);
+  earth.position.set(...earthPosition);
+  atmosphere.position.copy(earth.position);
+  halo.position.copy(earth.position);
+  earthLabel.position.copy(earth.position).add(new THREE.Vector3(0, trajRadius * 0.085, 0));
+  moonGroup.position.set(...moonPosition);
   const t = pts.length > 1 ? idx / (pts.length - 1) : 0;
   if (traveledLine) {
     // The line geometry is downsampled, so map trajectory progress onto the
@@ -2055,8 +1681,6 @@ populateSettingsFields();
 applyDisplaySettings();
 resize();
 animate();
-restoreMissionForm();
-setupMissionUI();
 loadTrajectory();
 loadPinnResult();
 loadPredictions();

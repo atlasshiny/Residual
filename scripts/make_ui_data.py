@@ -60,6 +60,62 @@ def _load_sun_track(
     """
     path = path or ROOT / "data" / "reference_sun.csv"
     if not path.exists():
+        # The canonical raw Moon and this Sun ephemeris cover the same 2025
+        # training/reference interval. Rotate the geocentric Sun vectors into
+        # the canonical solver frame with the canonical raw Moon basis.
+        raw_sun = ROOT / "data" / "raw_sun_moon_training.csv"
+        raw_moon = ROOT / "data" / "raw_moon.csv"
+        if raw_sun.exists() and raw_moon.exists():
+            moon_rows = _read_csv(raw_moon)
+            sun_rows = _read_csv(raw_sun)
+            if moon_rows and sun_rows:
+                p0 = [float(moon_rows[0][k]) for k in ("x", "y", "z")]
+                v0 = [float(moon_rows[0][k]) for k in ("vx", "vy", "vz")]
+                cross = [
+                    p0[1] * v0[2] - p0[2] * v0[1],
+                    p0[2] * v0[0] - p0[0] * v0[2],
+                    p0[0] * v0[1] - p0[1] * v0[0],
+                ]
+                norm = lambda v: math.sqrt(sum(x * x for x in v))
+                e1 = [v / norm(p0) for v in p0]
+                e3 = [v / norm(cross) for v in cross]
+                e2 = [
+                    e3[1] * e1[2] - e3[2] * e1[1],
+                    e3[2] * e1[0] - e3[0] * e1[2],
+                    e3[0] * e1[1] - e3[1] * e1[0],
+                ]
+                basis = [e1, e2, e3]
+                sun_times = [float(row["t"]) for row in sun_rows]
+                if min(times) < sun_times[0] or max(times) > sun_times[-1]:
+                    _warn(
+                        "raw Sun ephemeris does not cover the trajectory interval; "
+                        "skipping the Sun marker"
+                    )
+                    return None
+                directions, ranges_km = [], []
+                missing = 0
+                for t in times:
+                    vector = [
+                        _interp_track(
+                            sun_times,
+                            [float(row[axis]) for row in sun_rows],
+                            t,
+                        )
+                        for axis in ("x", "y", "z")
+                    ]
+                    rotated = [sum(basis[i][j] * vector[j] for j in range(3)) for i in range(3)]
+                    distance = norm(rotated)
+                    if not math.isfinite(distance) or distance == 0:
+                        missing += 1
+                        directions.append(directions[-1] if directions else [0.0, 0.0, 0.0])
+                        ranges_km.append(ranges_km[-1] if ranges_km else 0.0)
+                    else:
+                        directions.append([v / distance for v in rotated])
+                        ranges_km.append(distance)
+                if missing <= max(1, len(times) // 100):
+                    if missing:
+                        _warn(f"{missing} raw Sun samples were filled from the previous epoch")
+                    return directions, ranges_km
         _warn(f"missing source, no Sun in the scene: {path}")
         return None
     rows = _read_csv(path)
@@ -102,6 +158,23 @@ def _load_sun_track(
     if missing:
         _warn(f"{missing}/{len(times)} Sun samples were filled from the previous epoch")
     return directions, ranges_km
+
+
+def _interp_track(times: list[float], values: list[float], t: float) -> float:
+    """Linear interpolation matching numpy.interp without requiring NumPy."""
+    if t <= times[0]:
+        return values[0]
+    if t >= times[-1]:
+        return values[-1]
+    lo, hi = 0, len(times) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if times[mid] <= t:
+            lo = mid
+        else:
+            hi = mid
+    fraction = (t - times[lo]) / (times[hi] - times[lo])
+    return values[lo] + fraction * (values[hi] - values[lo])
 
 
 def build_trajectory() -> None:
@@ -249,6 +322,14 @@ def main() -> int:
         # The Sun track is embedded in trajectory.json rather than shipped as
         # its own bundle file.
         sources["sun"] = "data/reference_sun.csv (embedded in trajectory.json)"
+    elif (
+        (ROOT / "data" / "raw_sun_moon_training.csv").exists()
+        and (ROOT / "data" / "raw_moon.csv").exists()
+    ):
+        sources["sun"] = (
+            "data/raw_sun_moon_training.csv rotated with data/raw_moon.csv "
+            "(embedded in trajectory.json)"
+        )
 
     ui_manifest = {
         "schema": "ui-data/v1",

@@ -19,7 +19,6 @@ The project implements the restricted Earth-Moon multibody problem with a symple
   - **Linear regression**: linear baseline.
 - **Cosmos Integration**: Python workers (`ml/cosmos/`) implement transfer, inverse-dynamics, and forward-dynamics jobs over a file contract. `scripts/pinn_to_cosmos.py` reconstructs a PINN-corrected trajectory, runs the Rust `posebuilder`, and optionally submits 9D actions to vLLM-Omni.
 - **Tauri + Three.js Viewer**: visualizes the trajectory and the PINN/SINDy metrics and expression, plus a Sun-direction marker that tracks the current epoch (its distance is compressed to fit the lunar scene; the UI label says "not to scale"). The orbit view renders guide-style visuals: a dimmed full reference path with a bright growing traveled trail, exaggerated Earth/Moon markers and labels, a deterministic starfield, and a static "Top view" framing the arc face-on down the orbit normal.
-- **Live Mission Runner**: the same viewer can propagate a new mission in-app from an Earth-centred state vector, duration, and impulsive burns. The Tauri backend calls the pure `mission` crate (Rust Dormand–Prince), returns a `points`/`times` bundle, and draws it with a cyan spacecraft marker instead of replaying the static JSON. See [`docs/mission-runner.md`](docs/mission-runner.md).
 
 ## 📊 Results & Analysis
 
@@ -106,19 +105,6 @@ cargo build --workspace
 
 SPICE ingestion is Python-only (`scripts/fetch_spice.py` with `spiceypy`); it produces the same canonical `data/reference.csv` as Horizons, so the residual and ML stages are source-agnostic.
 
-### Live Mission Runner
-
-The desktop viewer's **Mission** card propagates a state vector locally instead of loading the bundled 30-day reference arc. Start the Tauri app (`cd tauri-src && npm run dev`), then:
-
-1. Pick a centre (Earth-centred inertial by default, or Earth–Moon barycentric).
-2. Enter duration, position (`km`), and velocity (`km/s`); optionally add up to 8 impulsive burns (`t` in seconds, `Δv` in `m/s`).
-3. Press **Run mission**. The backend runs the Rust Dormand–Prince core on a blocking thread and returns a uniformly sampled `points`/`times` bundle; the viewport swaps to a cyan **Craft** marker and the trajectory card shows the live frame and sample count.
-4. **Load bundle** restores the static reference arc. In a plain browser (no Tauri IPC) the mission card reports that the desktop backend is required and the bundled viewer keeps working.
-
-Presets fill a 400 km LEO orbit and an approximate translunar injection. The form is saved in `localStorage`.
-
-Current limitations: the propagator uses the analytic circular Earth–Moon ephemeris (no SPICE kernels in Rust), there is no finite-thrust, atmosphere, or launch model yet, and Earth-centred inputs are converted with the Earth's position at the start epoch but do not subtract its ~12 m/s barycentric velocity. Those approximation notes are documented in [`docs/mission-runner.md`](docs/mission-runner.md) and in the crate docs.
-
 ### Generalization Roadmap
 
 The correction models currently train on one 30-day Moon arc and report a random-split R², which measures interpolation rather than transfer. [`docs/generalization-plan.md`](docs/generalization-plan.md) lays out the path to a genuinely generalized model: temporal and mission-level holdouts, state-based features instead of time, acceleration-residual targets, multi-arc training data, uncertainty/OOD gating, and a benchmark suite. It also lists the P0 work that should be done before quoting any model as "generalized."
@@ -159,6 +145,37 @@ scores remain diagnostic until actual thrust and mass histories are available.
 propagation on the held-out synthetic arcs. Training and evaluation artifacts
 write under `ml/pinn/synthetic_transfer/` and leave production checkpoints
 untouched.
+
+The current pilot is not ready for Artemis correction: its high all-sample
+R² is dominated by the explicit thrust term, while learned coast correction
+R² is about 0.006 and free-rollout results are inconsistent across the two
+held-out arcs. Both Artemis Moon arcs trigger the correction gate; the Orion
+acceleration checks are inconclusive without burn and mass histories.
+
+### Satellite path prediction experiment
+
+For direct path prediction, use a separate sequence model instead of the
+Moon-residual correction PINN. `make synthetic-satellite-data` generates
+Earth LEO/MEO/high-orbit and low/high lunar-orbit tracks under Earth, Moon, and
+Sun gravity, Earth/Moon J2, and solar radiation pressure. Each row contains a
+state, body ephemerides, cadence, and vehicle properties; the target is the
+next observed position and velocity. The trainer splits by complete orbit arc
+within each regime, so neighboring samples from a trajectory cannot leak into
+validation or test. Run `make train-satellite-path-model` and then
+`make evaluate-satellite-path-model` for held-out free rollouts and an external
+LRO path comparison. Training/checkpoints live in
+`ml/pinn/satellite_path_model/`; the existing PINN and Artemis weights and
+viewer predictions are not used or overwritten. The synthetic generator does
+not yet model stationkeeping burns, and LRO vehicle mass/area are placeholders
+in the external evaluation. A useful next training-data step is to replace
+those placeholders with mission vehicle data and add maneuver-tagged satellite
+arcs; Artemis remains a test set, never training input. In the current 40-arc
+pilot, the model beats a constant-velocity baseline but still has about 64,000
+km mean position RMSE over two-day synthetic holdouts and about 392,000 km on
+the LRO arc. It is a pipeline prototype, not a useful navigation prediction.
+The next iteration should learn short-step acceleration/dynamics and integrate
+those predictions, with real multi-mission orbit histories and maneuver
+metadata; direct 600-second next-state regression drifts too much.
 
 ### Make Targets
 

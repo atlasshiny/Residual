@@ -1,4 +1,4 @@
-.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench clean ui-data ensemble-data
+.PHONY: all cuda rust python test fetch-data fetch-sun fetch-spice fetch-lro-transfer fetch-moon-training-data synthetic-rocket-data train-synthetic-dynamics evaluate-artemis-transfer evaluate-synthetic-rollout residual residual-tabulated residual-tabulated-sun train test-cpu test-cuda tauri bench clean ui-data ensemble-data
 
 BUILD_DIR ?= build
 BUILD_CPU_DIR ?= target/build-cpu
@@ -108,13 +108,59 @@ SYNTHETIC_TRAIN_ARGS ?= --moon-data data/moon_training_accel_residuals.csv
 train-synthetic-dynamics:
 	uv run --extra data --extra gpu python scripts/train_synthetic_dynamics.py $(SYNTHETIC_TRAIN_ARGS)
 
+# Rebuild Artemis test labels from the held-out Horizons arcs. Never trains
+# on or modifies the Artemis-specific prediction/model files.
+prepare-artemis-tests:
+	uv run --extra data python scripts/convert_reference.py \
+	  --raw data/raw_moon_artemis1.csv --out data/reference_artemis1_preserve.csv \
+	  --manifest data/reference_artemis1_preserve.manifest.json --preserve-distance \
+	  --sun-raw data/raw_sun_artemis1.csv --sun-out data/reference_sun_artemis1.csv
+	uv run --extra data python scripts/convert_reference.py \
+	  --raw data/raw_moon_artemis2.csv --out data/reference_artemis2_preserve.csv \
+	  --manifest data/reference_artemis2_preserve.manifest.json --preserve-distance \
+	  --sun-raw data/raw_sun_artemis2.csv --sun-out data/reference_sun_artemis2.csv
+	uv run --extra data python scripts/convert_spacecraft.py \
+	  data/raw_artemis1.csv data/raw_moon_artemis1.csv \
+	  data/reference_artemis1_spacecraft_preserve.csv --preserve-distance
+	uv run --extra data python scripts/convert_spacecraft.py \
+	  data/raw_artemis2.csv data/raw_moon_artemis2.csv \
+	  data/reference_artemis2_spacecraft_preserve.csv --preserve-distance
+	uv run --extra data python scripts/build_ephemeris_accel_residuals.py \
+	  --target moon --reference data/reference_artemis1_preserve.csv \
+	  --sun data/reference_sun_artemis1.csv --out data/artemis1_moon_accel_test.csv
+	uv run --extra data python scripts/build_ephemeris_accel_residuals.py \
+	  --target moon --reference data/reference_artemis2_preserve.csv \
+	  --sun data/reference_sun_artemis2.csv --out data/artemis2_moon_accel_test.csv
+	uv run --extra data python scripts/build_ephemeris_accel_residuals.py \
+	  --target spacecraft --reference data/reference_artemis1_spacecraft_preserve.csv \
+	  --moon data/reference_artemis1_preserve.csv --sun data/reference_sun_artemis1.csv \
+	  --out data/artemis1_orion_accel_diagnostic.csv
+	uv run --extra data python scripts/build_ephemeris_accel_residuals.py \
+	  --target spacecraft --reference data/reference_artemis2_spacecraft_preserve.csv \
+	  --moon data/reference_artemis2_preserve.csv --sun data/reference_sun_artemis2.csv \
+	  --out data/artemis2_orion_accel_diagnostic.csv
+
 # External evaluation only; these Artemis arcs are never used in training.
-ARTEMIS_EVAL_ARGS ?= --data data/artemis1_moon_accel_test.csv data/artemis2_moon_accel_test.csv data/artemis2_orion_accel_diagnostic.csv
-evaluate-artemis-transfer:
+ARTEMIS_EVAL_ARGS ?= --data data/artemis1_moon_accel_test.csv data/artemis2_moon_accel_test.csv data/artemis1_orion_accel_diagnostic.csv data/artemis2_orion_accel_diagnostic.csv
+evaluate-artemis-transfer: prepare-artemis-tests
 	uv run --extra data --extra gpu python scripts/evaluate_state_acceleration_model.py $(ARTEMIS_EVAL_ARGS)
 
 evaluate-synthetic-rollout:
 	uv run --extra data --extra gpu python scripts/evaluate_synthetic_rollout.py
+
+# Train a separate next-state satellite predictor on synthetic Earth/lunar
+# orbit tracks; whole arcs are held out and LRO remains an external test.
+SATELLITE_ARGS ?=
+synthetic-satellite-data:
+	uv run --extra data python scripts/generate_synthetic_satellite_data.py $(SATELLITE_ARGS)
+
+SATELLITE_TRAIN_ARGS ?=
+train-satellite-path-model:
+	uv run --extra data --extra gpu python scripts/train_satellite_path_model.py $(SATELLITE_TRAIN_ARGS)
+
+SATELLITE_EVAL_ARGS ?=
+evaluate-satellite-path-model:
+	uv run --extra data --extra gpu python scripts/evaluate_satellite_path_model.py $(SATELLITE_EVAL_ARGS)
 
 # Reference trajectory -> residual table (dr, dv per sample).
 # Uses the circular Earth-Moon ephemeris, matching the CUDA kernel.
