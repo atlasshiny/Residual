@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Orbital propagator, residual analysis, KAN symbolic correction, and Cosmos validation"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26"]
+dependencies = ["numpy>=1.26", "scikit-learn"]
 
 [project.optional-dependencies]
 gpu = ["torch"]
