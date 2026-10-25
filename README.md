@@ -21,7 +21,53 @@ The project implements the restricted Earth-Moon multibody problem with a symple
 - **Cosmos Integration**: Python workers (`ml/cosmos/`) implement transfer, inverse-dynamics, and forward-dynamics jobs over a file contract. `scripts/pinn_to_cosmos.py` reconstructs a PINN-corrected trajectory, runs the Rust `posebuilder`, and optionally submits 9D actions to vLLM-Omni.
 - **Tauri + Three.js Viewer**: visualizes the trajectory and the PINN/SINDy metrics and expression, plus a Sun-direction marker that tracks the current epoch (its distance is compressed to fit the lunar scene; the UI label says "not to scale"). The orbit view renders guide-style visuals: a dimmed full reference path with a bright growing traveled trail, exaggerated Earth/Moon markers and labels, a deterministic starfield, and a static "Top view" framing the arc face-on down the orbit normal.
 
-## 📊 Results & Analysis
+## System Architecture
+```mermaid
+flowchart LR
+    classDef sourceStyle fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef coreStyle fill:#0f172a,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef mlStyle fill:#31102b,stroke:#ec4899,stroke-width:2px,color:#f8fafc;
+    classDef protoStyle fill:#1f2937,stroke:#9ca3af,stroke-width:1px,stroke-dasharray: 5 5,color:#9ca3af;
+    classDef storeStyle fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    classDef uiStyle fill:#1e1b4b,stroke:#8b5cf6,stroke-width:2px,color:#f8fafc;
+
+    subgraph Ingestion ["1. Data Ingestion"]
+        Sources["NASA Horizons / SPICE<br/>& Ephemeris Telemetry"]
+    end
+
+    subgraph Engine ["2. Compute Core"]
+        Rust["Rust + CUDA/C++ Core<br/>FP64 N-Body Propagator & Residuals"]
+    end
+
+    subgraph Intelligence ["3. Intelligence Layer"]
+        ML["PINN & SINDy Branch<br/>Symbolic Correction Equations"]
+        Cosmos["Cosmos 3 Super<br/>*(Prototyped / Pivoted)*"]
+    end
+
+    subgraph Transport ["4. Transport"]
+        Store["Apache Arrow<br/>Artifact Store"]
+    end
+
+    subgraph Presentation ["5. Frontend"]
+        UI["Tauri + Three.js UI<br/>Interactive 3D Viewport & Metrics"]
+    end
+
+    Sources --> Rust
+    Rust --> ML
+    Rust -.-> Cosmos
+    ML --> Store
+    Cosmos -.-> Store
+    Store --> UI
+
+    class Sources sourceStyle;
+    class Rust coreStyle;
+    class ML mlStyle;
+    class Cosmos protoStyle;
+    class Store storeStyle;
+    class UI uiStyle;
+```
+
+## Results & Analysis
 
 Current results on the 30-day Moon reference arc (`data/residual_table.csv`, 4321 samples, 0 burn-masked) with the default pipeline. The train/test split is a **seeded random interpolation split** (`--split random --test-fraction 0.2`); use `--split time` or `--split group` for temporal and whole-arc holdouts.
 
