@@ -1453,6 +1453,8 @@ showPropCb?.addEventListener("change", () => {
 });
 showCorrCb?.addEventListener("change", () => {
   trajGroup.children.forEach((c) => { if (c.name === "overlay-corr") c.visible = !!showCorrCb.checked; });
+  const idx = parseInt(orbitSlider?.value || "0", 10) || 0;
+  drawGuide(idx);
   requestRender();
 });
 
@@ -1585,6 +1587,32 @@ function setOrbitIndex(idx, { syncEnsemble = true } = {}) {
   requestRender();
   return idx;
 }
+function updateOrbitVisuals(fraction = 0) {
+  const pts = trajectoryData?.points || [];
+  if (!pts.length) return;
+  const base = Math.max(0, Math.min(pts.length - 1, parseInt(orbitSlider?.value || "0", 10) || 0));
+  const next = Math.min(pts.length - 1, base + 1);
+  const f = Math.max(0, Math.min(1, Number(fraction) || 0));
+  const x = pts[base][0] + (pts[next][0] - pts[base][0]) * f;
+  const y = pts[base][1] + (pts[next][1] - pts[base][1]) * f;
+  const z = pts[base][2] + (pts[next][2] - pts[base][2]) * f;
+  moonGroup.position.set(x, y, z);
+  craftGroup.position.set(x, y, z);
+
+  const progress = pts.length > 1 ? (base + f) / (pts.length - 1) : 0;
+  if (traveledLine) {
+    const samples = traveledLine.userData.renderSamples || pts.length;
+    const renderIdx = samples > 1 ? Math.round(progress * (samples - 1)) : 0;
+    traveledLine.geometry.setDrawRange(0, renderIdx + 1);
+  }
+  if (traveledTubeRef) {
+    const { indexPerSegment, tubularSegments } = traveledTubeRef.userData;
+    const seg = Math.max(1, Math.round(progress * tubularSegments));
+    traveledTubeRef.geometry.setDrawRange(0, seg * indexPerSegment);
+  }
+  requestRender();
+}
+
 function stepOrbit(delta) {
   const cur = parseInt(orbitSlider?.value || "0", 10) || 0;
   setOrbitIndex(cur + delta);
@@ -1608,7 +1636,10 @@ function updateOrbitPlayback(dt) {
     stepped = true;
   }
   if (stepped) setOrbitIndex(idx);
-}
+  // Keep the marker and traveled trail visually continuous between samples.
+  // Logical playback, timing, and the slider still advance one sample at a
+  // time; only the rendered position/trail length is interpolated.
+  updateOrbitVisuals(orbitAcc);
 
 /* ---------------- animate ---------------- */
 let lastFrameTime = performance.now();
