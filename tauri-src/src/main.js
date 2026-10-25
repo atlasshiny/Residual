@@ -999,6 +999,22 @@ function resetTrajectoryScene() {
   setOrbitPropsVisible();
 }
 
+/* Geometry is built from a bounded number of samples so a long trajectory does
+   not turn into an enormous tube mesh.  The full point list stays in
+   `trajectoryData` for markers, timing, charts, and the playback slider. */
+const MAX_TRAJECTORY_RENDER_POINTS = 4000;
+const MAX_TUBULAR_SEGMENTS = 4096;
+
+function downsampleArray(items, maxItems) {
+  if (items.length <= maxItems) return items;
+  if (maxItems < 2) return items.slice(0, 1);
+  // Keep the first and last sample and spread the rest evenly across the arc.
+  const out = new Array(maxItems);
+  const step = (items.length - 1) / (maxItems - 1);
+  for (let i = 0; i < maxItems; i++) out[i] = items[Math.round(i * step)];
+  return out;
+}
+
 /* Build the scene from a trajectory document.  Both the bundled JSON file and
    the mission runner's live response use this shape (`points`, `times`,
    optional overlays), so the renderer never needs to know where it came from. */
@@ -1048,9 +1064,18 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
   const closedLoop =
     points.length > 2 && points[0].distanceTo(points[points.length - 1]) <= maxR * 0.01;
   const curvePoints = closedLoop ? points.slice(0, -1) : points;
-  const curve = new THREE.CatmullRomCurve3(curvePoints, closedLoop, "centripetal");
+  // Tube and line geometry use the downsampled set; the duplicate closing
+  // sample is added back to the line so a closed orbit still meets itself.
+  const renderPoints = downsampleArray(curvePoints, MAX_TRAJECTORY_RENDER_POINTS);
+  const renderLinePoints = closedLoop
+    ? [...renderPoints, renderPoints[0]]
+    : renderPoints;
+  const curve = new THREE.CatmullRomCurve3(renderPoints, closedLoop, "centripetal");
   const tubeRadius = Math.max(20, maxR * 0.0035);
-  const tubularSegments = Math.max(points.length * 2, 64);
+  const tubularSegments = Math.max(
+    Math.min(renderPoints.length * 2, MAX_TUBULAR_SEGMENTS),
+    64
+  );
   // Planned path: thin and faint, like the ghosted full path in
   // scripts/render_guide.py.
   const tube = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius * 0.7, 12, false);
@@ -1088,16 +1113,19 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
   trajGroup.add(traveledTube);
 
   const fullLine = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.BufferGeometry().setFromPoints(renderLinePoints),
     new THREE.LineBasicMaterial({ color: 0xfde68a, transparent: true, opacity: 0.22 })
   );
   trajGroup.add(fullLine);
 
   traveledLine = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.BufferGeometry().setFromPoints(renderLinePoints),
     new THREE.LineBasicMaterial({ color: 0xfff7d6, transparent: true, opacity: 1 })
   );
   traveledLine.geometry.setDrawRange(0, 1);
+  // The draw range is expressed in render samples, not full trajectory
+  // samples, so playback maps its progress before applying it.
+  traveledLine.userData.renderSamples = renderLinePoints.length;
   trajGroup.add(traveledLine);
   traveledTubeRef = traveledTube;
 
@@ -1109,7 +1137,9 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
   for (const spec of overlaySpecs) {
     const arr = data[spec.key];
     if (!Array.isArray(arr) || arr.length < 2) continue;
-    const pts = arr.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+    const pts = downsampleArray(arr, MAX_TRAJECTORY_RENDER_POINTS).map((p) =>
+      new THREE.Vector3(p[0], p[1], p[2])
+    );
     const geo = new THREE.BufferGeometry().setFromPoints(pts);
     const mat = new THREE.LineBasicMaterial({ color: spec.color, transparent: true, opacity: 0.85 });
     const line = new THREE.Line(geo, mat);
@@ -1165,6 +1195,9 @@ function applyTrajectoryBundle(data, { source = "bundle" } = {}) {
     ],
     ["Loop", closedLoop ? "Closed" : "Open"],
   ];
+  if (renderLinePoints.length < points.length) {
+    kvPairs.push(["Render samples", renderLinePoints.length]);
+  }
   const sunRanges = (sunRangeKm || []).filter((v) => Number.isFinite(v) && v > 0);
   if (sunRanges.length) {
     const AU = 149597870.7;
@@ -1868,11 +1901,17 @@ function setOrbitIndex(idx, { syncEnsemble = true } = {}) {
   if (orbitSlider) orbitSlider.value = String(idx);
   moonGroup.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
   craftGroup.position.set(pts[idx][0], pts[idx][1], pts[idx][2]);
-  if (traveledLine) traveledLine.geometry.setDrawRange(0, idx + 1);
+  const t = pts.length > 1 ? idx / (pts.length - 1) : 0;
+  if (traveledLine) {
+    // The line geometry is downsampled, so map trajectory progress onto the
+    // render sample count before capping the draw range.
+    const samples = traveledLine.userData.renderSamples || pts.length;
+    const renderIdx = samples > 1 ? Math.round(t * (samples - 1)) : 0;
+    traveledLine.geometry.setDrawRange(0, renderIdx + 1);
+  }
   if (traveledTubeRef) {
     const { indexPerSegment, tubularSegments } = traveledTubeRef.userData;
     // Map the sample index onto the resampled tube's path parameter.
-    const t = pts.length > 1 ? idx / (pts.length - 1) : 0;
     const seg = Math.max(1, Math.round(t * tubularSegments));
     traveledTubeRef.geometry.setDrawRange(0, seg * indexPerSegment);
   }
