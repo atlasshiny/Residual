@@ -40,6 +40,14 @@ __pycache__/
 *.sqlite3-shm
 *.sqlite3-wal
 
+# Generated renders and local model checkpoints
+/out/
+/ml/pinn/*.pt
+
+# Cosmos serving outputs and Slurm logs
+/hpc/cosmos3/outputs/
+/hpc/cosmos3/logs/
+
 # Ignore specific files if they exist
 *.csv
 *.json

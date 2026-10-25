@@ -299,6 +299,22 @@ def run(args) -> tuple:
         },
         weights_path,
     )
+    mlp_weights_path = Path(args.mlp_weights_out)
+    mlp_weights_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "schema": "orbital-mlp/v1",
+            "state_dict": mlp.state_dict(),
+            "dims": [n_features, 64, 32, out_dim],
+            "feature_columns": feature_cols,
+            "target_columns": pos_cols,
+            "time_column": time_col if df is not None else None,
+            "scaler_pos": None
+            if scaler_pos is None
+            else {"mean": scaler_pos.mean_.tolist(), "scale": scaler_pos.scale_.tolist()},
+        },
+        mlp_weights_path,
+    )
 
     if df is not None:
         X_all, _ = build_xy(df, feature_cols=feature_cols, target_cols=pos_cols)
@@ -357,6 +373,41 @@ def run(args) -> tuple:
             stream,
             indent=2,
         )
+    mlp_predictions_path = Path(args.mlp_predictions_out)
+    mlp_predictions_path.parent.mkdir(parents=True, exist_ok=True)
+    with mlp_predictions_path.open("w", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "schema": "mlp-predictions/v1",
+                "data": str(args.data) if args.data else None,
+                "synthetic_demo": not has_source_data,
+                "time_column": time_col if has_source_data else "sample_index",
+                "target_columns": pos_cols,
+                "rows": [
+                    {
+                        "t": row["t"],
+                        "actual": row["actual"],
+                        "prediction": row["mlp"],
+                    }
+                    for row in prediction_rows
+                ],
+            },
+            stream,
+            indent=2,
+        )
+    mlp_predictions_csv_path = Path(args.mlp_predictions_csv_out)
+    mlp_predictions_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    mlp_csv_rows = [
+        {
+            "t": row["t"],
+            **row["actual"],
+            **{f"{col}_pred": value for col, value in row["mlp"].items()},
+        }
+        for row in prediction_rows
+    ]
+    (__import__("pandas").DataFrame(mlp_csv_rows)).to_csv(
+        mlp_predictions_csv_path, index=False
+    )
     csv_path = Path(args.predictions_csv_out)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     df_predictions = df.__class__(csv_rows) if df is not None else __import__("pandas").DataFrame(csv_rows)
@@ -364,6 +415,9 @@ def run(args) -> tuple:
     print(f"Predictions JSON: {predictions_path}")
     print(f"Predictions CSV:  {csv_path}")
     print(f"Best model weights: {weights_path}")
+    print(f"Best MLP weights:   {mlp_weights_path}")
+    print(f"MLP predictions:    {mlp_predictions_path}")
+    print(f"MLP predictions CSV:{mlp_predictions_csv_path}")
 
     # --- SINDy ---
     sindy_deg = 1
@@ -378,6 +432,23 @@ def run(args) -> tuple:
         Y_pos_raw_train[: len(X_test)] if df_test is None else df_test[pos_cols].values,
         predict=sindy_predict_fn,
     )
+    sindy_all = sindy_predict(X_all, Xi, degree=sindy_deg)
+    sindy_rows = []
+    for row_idx, values in enumerate(sindy_all):
+        row = {"t": prediction_times[row_idx]}
+        row.update(
+            {col: float(actual_values[row_idx, idx]) for idx, col in enumerate(pos_cols)}
+        )
+        row.update(
+            {f"{col}_sindy_pred": float(values[idx]) for idx, col in enumerate(pos_cols)}
+        )
+        sindy_rows.append(row)
+    sindy_predictions_path = Path(args.sindy_predictions_csv_out)
+    sindy_predictions_path.parent.mkdir(parents=True, exist_ok=True)
+    __import__("pandas").DataFrame(sindy_rows).to_csv(
+        sindy_predictions_path, index=False
+    )
+    print(f"SINDy predictions CSV: {sindy_predictions_path}")
 
     # --- Linear Regression ---
     W_lr = linear_regression(X_train, Y_pos_raw_train)
@@ -453,9 +524,19 @@ def build_parser():
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--out", default="ml/pinn/pinn_result.json")
     parser.add_argument("--weights-out", default="ml/pinn/pinn_models.pt")
+    parser.add_argument("--mlp-weights-out", default="ml/pinn/mlp_model.pt")
     parser.add_argument("--predictions-out", default="ml/pinn/pinn_predictions.json")
     parser.add_argument(
+        "--mlp-predictions-out", default="ml/pinn/mlp_predictions.json"
+    )
+    parser.add_argument(
+        "--mlp-predictions-csv-out", default="ml/pinn/mlp_predictions.csv"
+    )
+    parser.add_argument(
         "--predictions-csv-out", default="ml/pinn/pinn_predictions.csv"
+    )
+    parser.add_argument(
+        "--sindy-predictions-csv-out", default="ml/pinn/sindy_predictions.csv"
     )
     return parser
 

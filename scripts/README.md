@@ -46,16 +46,25 @@ cargo run -p residual --example residual_pipeline -- \
   data/reference.csv data/residual_table.csv
 uv run --extra gpu --extra data python -m ml.pinn.run \
   --data data/residual_table.csv --out ml/pinn/pinn_result.json \
-  --predictions-out ml/pinn/pinn_predictions.csv
+  --weights-out ml/pinn/pinn_models.pt \
+  --predictions-out ml/pinn/pinn_predictions.json \
+  --mlp-weights-out ml/pinn/mlp_model.pt \
+  --mlp-predictions-out ml/pinn/mlp_predictions.json \
+  --mlp-predictions-csv-out ml/pinn/mlp_predictions.csv \
+  --predictions-csv-out ml/pinn/pinn_predictions.csv \
+  --sindy-predictions-csv-out ml/pinn/sindy_predictions.csv
 ```
 
 `make fetch-data` runs the first two stages with the Makefile’s configured
 arguments; `make residual` creates `data/residual_table.csv` after fetching a
 reference if needed. The residual CSV contains `t`, position residuals
 `drx,dry,drz`, and velocity residuals `dvx,dvy,dvz`. The PINN command writes
-metrics to JSON and a row-aligned CSV containing actual residuals, predicted
-position residuals (`drx_pred,dry_pred,drz_pred`), and the actual velocity
-residuals needed to reconstruct the baseline state.
+metrics to `pinn_result.json`, validation-selected PINN/MLP checkpoints and
+preprocessing metadata to `pinn_models.pt`, per-row predictions from both
+models to `pinn_predictions.json`, and a compatible CSV for the Cosmos adapter.
+Separate MLP artifacts are also written to `mlp_model.pt` and
+`mlp_predictions.json` and `mlp_predictions.csv`.
+SINDy predictions for each input row are written to `sindy_predictions.csv`.
 
 ## Cosmos action-vector generation
 
@@ -112,6 +121,16 @@ the actions specify camera motion.
 | `fetch_artemis.py` | Convenience pipeline for Artemis I or II: fetches spacecraft and Moon Horizons arcs, then runs `convert_spacecraft.py`. Writes `data/raw_artemisN.csv`, `data/raw_moon_artemisN.csv`, and `data/reference_artemisN.csv`. Override the mission date range with `--start` and `--stop`. |
 | `mock_cosmos_worker.py` | Local mock worker for exercising the repository’s Cosmos job/action file contract. It does not load Cosmos or generate model videos; use it only for plumbing/demo checks. |
 | `pinn_to_cosmos.py` | Reconstructs a PINN-corrected trajectory, runs Rust posebuilder, and optionally submits the 9D actions to vLLM-Omni. Writes corrected trajectory and Cosmos job/action JSON; with `--serve-url`, also writes the returned video. |
+| `pinn_trajectory.py` | Combines a reference CSV with PINN, MLP, or SINDy residual predictions and writes a corrected canonical trajectory CSV plus RMS error diagnostics. |
+| `render_guide.py` | Produces a lightweight orbital guide video and frame-position CSV from a reference, raw Moon ephemeris, and optional corrected trajectory. |
+| `render_bodies.py` | Renders Earth/Moon bodies and selected truth/model paths; writes a video and matching pixel-position CSV for composition. |
+| `restyle.py` | Sends a control video and prompt to vLLM-Omni Cosmos3-Super through `/v1/videos/sync`; writes the returned restyled video. |
+| `submit_actions.py` | Sends a starting image and 9D action rows to the Cosmos3-Super forward-dynamics endpoint; writes the returned video. |
+| `composite.py` | Combines a restyled video with generated stars, orbital trails, model labels, and a spacecraft marker using `render_bodies.py` position data. |
+
+The video helpers need the data and render dependencies (`uv sync --extra data
+--extra render`). Their outputs are generated artifacts; place them under `out/`,
+which is ignored by Git.
 
 ## Artemis data
 
@@ -127,12 +146,13 @@ For Artemis II, use `--mission 2`. Its default mission dates may be future
 relative to current Horizons coverage; supply a supported `--start`/`--stop`
 window if the query is rejected. Train on the resulting residual file with
 `--data data/residual_artemis1.csv` and write a mission-specific prediction
-CSV using `--predictions-out`.
+JSON using `--predictions-out` (and CSV using `--predictions-csv-out`).
 
 ## Data quality notes
 
 `pinn_result.json` contains scores, not per-sample predictions. The prediction
-CSV is required by the Cosmos adapter. PINN scores should be reviewed before
+JSON contains both models’ per-sample predictions; the CSV is used by the
+Cosmos adapter. PINN scores should be reviewed before
 using the output; a low or negative held-out R² means the trajectory is an
 experimental visualization input, not a validated physical correction. The
 Cosmos video is a generated visualization conditioned on actions and a first
