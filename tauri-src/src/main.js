@@ -1585,7 +1585,7 @@ function drawGuide(idx) {
   if (!guideCanvas) return;
   const ctx = guideCanvas.getContext("2d");
   const W = guideCanvas.width, H = guideCanvas.height;
-  ctx.fillStyle = "#050816"; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#030611"; ctx.fillRect(0, 0, W, H);
   if (!trajectoryData?.points?.length) return;
   const pts = trajectoryData.points;
   const i = Math.max(0, Math.min(pts.length - 1, idx ?? 0));
@@ -1618,9 +1618,8 @@ function drawGuide(idx) {
   const bx = orbitPlane?.b ?? 2;
   const proj = (p) => [p[ax], p[bx]];
 
-  // Frame the path first, then include the Moon only when it is close enough
-  // to be a useful reference.  A translunar mission would otherwise compress
-  // the Earth-centred arc into a few pixels.
+  // Frame the full path, as the Python guide renderer does. A remote Moon is
+  // omitted for Earth-centred live missions to preserve the useful arc scale.
   const boundsOf = (list) => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of list) {
@@ -1629,9 +1628,11 @@ function drawGuide(idx) {
     }
     return { minX, maxX, minY, maxY };
   };
-  const path = pts.map(proj);
+  const reference2 = pts.map(proj);
+  const path = [...reference2];
   const corr = trajectoryData.points_corrected;
-  if (Array.isArray(corr)) for (const p of corr) path.push(proj(p));
+  const showCorrected = Array.isArray(corr) && corr.length && !missionMode && (showCorrCb?.checked ?? false);
+  if (showCorrected) for (const p of corr) path.push(proj(p));
   let box = boundsOf([...path, proj(earth3)]);
   const cx0 = (box.minX + box.maxX) / 2;
   const cy0 = (box.minY + box.maxY) / 2;
@@ -1642,44 +1643,55 @@ function drawGuide(idx) {
   if (showMoon) box = boundsOf([...path, proj(earth3), moon2]);
   const cx = (box.minX + box.maxX) / 2;
   const cy = (box.minY + box.maxY) / 2;
-  const scale = 0.85 * Math.min(W / (box.maxX - box.minX || 1), H / (box.maxY - box.minY || 1));
+  const pad = 20;
+  const scale = 0.88 * Math.min((W - 2 * pad) / (box.maxX - box.minX || 1), (H - 2 * pad) / (box.maxY - box.minY || 1));
   const px = (p) => [W / 2 + (p[0] - cx) * scale, H / 2 - (p[1] - cy) * scale];
 
-  // stars
-  ctx.fillStyle = "rgba(200,200,200,0.6)";
-  for (let k = 0; k < 80; k++) {
-    const sx = (k*37) % W, sy = (k*73) % H;
-    ctx.fillRect(sx, sy, 1, 1);
+  // Deterministic starfield, so stars stay still while the epoch advances.
+  let seed = 3;
+  const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  for (let k = 0; k < 140; k++) {
+    const x = random() * W, y = random() * H;
+    ctx.fillStyle = `rgba(210,220,240,${0.2 + random() * 0.55})`;
+    const size = random() > 0.92 ? 2 : 1;
+    ctx.fillRect(x, y, size, size);
   }
 
-  // path trail up to the current sample
-  ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 1.5; ctx.beginPath();
-  for (let k = 0; k <= i; k++) {
-    const p = px(proj(pts[k]));
-    if (k === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
-  }
-  ctx.stroke();
+  const drawPath = (arr, color, width, alpha = 1) => {
+    if (!arr?.length) return;
+    ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.lineWidth = width;
+    ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.beginPath();
+    arr.forEach((p, k) => {
+      const q = px(p);
+      if (k === 0) ctx.moveTo(q[0], q[1]); else ctx.lineTo(q[0], q[1]);
+    });
+    ctx.stroke(); ctx.globalAlpha = 1;
+  };
+  // Dim complete planned arc with the traveled segment highlighted.
+  drawPath(reference2, "#e2e8f0", 1.25, 0.24);
+  drawPath(reference2.slice(0, i + 1), "#f59e0b", 4, 0.28);
+  drawPath(reference2.slice(0, i + 1), "#fff7d6", 1.7);
 
-  // corrected trail (bundled reference only)
-  if (Array.isArray(corr) && corr.length) {
-    ctx.strokeStyle = "rgba(244,114,182,0.9)"; ctx.lineWidth = 1.5; ctx.beginPath();
-    for (let k = 0; k <= Math.min(i, corr.length-1); k++) {
-      const p = px(proj(corr[k]));
-      if (k === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
-    }
-    ctx.stroke();
+  if (showCorrected) {
+    const corrected2 = corr.map(proj);
+    drawPath(corrected2, "#22d3ee", 1.1, 0.28);
+    drawPath(corrected2.slice(0, Math.min(i, corrected2.length - 1) + 1), "#22d3ee", 1.6, 0.95);
   }
 
   // earth
   const ep = px(proj(earth3));
-  ctx.fillStyle = "#2563eb";
-  ctx.beginPath(); ctx.arc(ep[0], ep[1], 6, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "rgba(37,99,235,0.24)";
+  ctx.beginPath(); ctx.arc(ep[0], ep[1], 10, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "#285fca";
+  ctx.beginPath(); ctx.arc(ep[0], ep[1], 5.5, 0, Math.PI*2); ctx.fill();
 
   // moon (may sit outside the framed path and be omitted)
   if (showMoon) {
     const mp = px(moon2);
-    ctx.fillStyle = "#9ca3af";
-    ctx.beginPath(); ctx.arc(mp[0], mp[1], 4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "rgba(203,213,225,0.22)";
+    ctx.beginPath(); ctx.arc(mp[0], mp[1], 7, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#b7bcc4";
+    ctx.beginPath(); ctx.arc(mp[0], mp[1], 3.5, 0, Math.PI*2); ctx.fill();
   }
 
   // sun bearing (the real Sun is ~1 AU out, so only the direction fits)
@@ -1707,19 +1719,33 @@ function drawGuide(idx) {
 
   // current body: the spacecraft in both modes, cyan for live missions
   const sp = px(proj(pts[i]));
-  ctx.fillStyle = missionMode ? "#22d3ee" : "#f59e0b";
-  ctx.beginPath(); ctx.arc(sp[0], sp[1], 5, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = missionMode ? "rgba(34,211,238,0.22)" : "rgba(245,158,11,0.24)";
+  ctx.beginPath(); ctx.arc(sp[0], sp[1], 9, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = missionMode ? "#22d3ee" : "#ff9b35";
+  ctx.beginPath(); ctx.arc(sp[0], sp[1], 4, 0, Math.PI*2); ctx.fill();
 
   // labels
-  ctx.fillStyle = "#94a3b8"; ctx.font = "10px sans-serif";
-  ctx.fillText("Earth", ep[0]+8, ep[1]);
+  ctx.fillStyle = "#cbd5e1"; ctx.font = "600 10px sans-serif";
+  ctx.fillText("EARTH", ep[0]+9, ep[1]-7);
   if (showMoon) {
     const mp = px(moon2);
-    ctx.fillText("Moon", mp[0]+6, mp[1]);
+    ctx.fillText("MOON", mp[0]+7, mp[1]-5);
   }
   if (missionMode) {
     ctx.fillStyle = "#a5f3fc";
-    ctx.fillText("Craft", sp[0] + 7, sp[1] - 7);
+    ctx.fillText("CRAFT", sp[0] + 7, sp[1] - 7);
+  }
+
+  // Small legend echoes the reference renderer's color roles.
+  const legendY = H - 10;
+  ctx.font = "9px sans-serif";
+  ctx.fillStyle = "#cbd5e1";
+  ctx.fillText("Reference", 10, legendY);
+  ctx.fillStyle = "#fff7d6";
+  ctx.fillText("Traveled", 82, legendY);
+  if (showCorrected) {
+    ctx.fillStyle = "#22d3ee";
+    ctx.fillText("Corrected", 147, legendY);
   }
 }
 

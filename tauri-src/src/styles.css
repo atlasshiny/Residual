@@ -712,3 +712,4 @@ body.light .settings-overlay { background: rgba(36, 44, 68, 0.4); }
   color: var(--text-mute);
 }
 #residual-canvas { width: 100%; height: 180px; border-radius: 8px; background: rgba(0,0,0,0.25); margin: 8px 0; display: block; }
+#guide-canvas { width: 100%; height: auto; aspect-ratio: 4 / 3; border: 1px solid var(--border-soft); border-radius: 8px; background: #030611; margin: 8px 0 0; display: block; }

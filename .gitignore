@@ -57,3 +57,7 @@ __pycache__/
 # The UI ships a generated bundle; keep it tracked despite *.json above
 !tauri-src/src/data/*.json
 !tauri-src/src/data/demo_job/*.json
+
+# usd repo
+OpenUSD/
+usd_viewer/
