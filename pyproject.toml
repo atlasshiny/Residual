@@ -4,9 +4,10 @@ version = "0.1.0"
 description = "Orbital propagator, residual analysis, KAN symbolic correction, and Cosmos validation"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
+gpu = ["torch"]
 data = ["numpy>=1.26", "pandas>=2.2", "pyarrow>=15.0"]
 render = ["numpy>=1.26"]
 dev = ["pytest>=8.0", "ruff>=0.6"]

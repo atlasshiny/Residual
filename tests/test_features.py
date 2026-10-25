@@ -8,14 +8,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-try:
-    from ml.kan.features import engineer_features
-except Exception:  # pragma: no cover
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "kan"))
-    from ml.pinn.features import engineer_features
+from ml.pinn.features import engineer_features
 
 
 def _df():

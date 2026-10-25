@@ -10,7 +10,7 @@ import pytest
 yaml = pytest.importorskip("yaml")
 pydantic = pytest.importorskip("pydantic")
 
-from ml.kan.config import PipelineConfig
+from ml.pinn.config import PipelineConfig
 
 
 def test_default_valid():

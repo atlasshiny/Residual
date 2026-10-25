@@ -1,15 +1,23 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+    nn = None
+    optim = None
 import math
 
-class PINN(nn.Module):
+class PINN(nn.Module if HAS_TORCH else object):
     """
     Physics-Informed Neural Network for orbital residual correction.
     The model predicts the position residuals delta_r = f(t).
     The physics constraint is that the derivative of delta_r must match delta_v.
     """
     def __init__(self, n_features=1, out_dim=3, hidden_dims=[32, 32], lr=1e-3, l2=1e-4):
+        if not HAS_TORCH:
+            raise ImportError("PyTorch is required for the PINN model. Install with 'pip install .[gpu]' or 'uv sync --extra gpu'.")
         super().__init__()
         self.lr = lr
         self.l2 = l2

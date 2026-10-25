@@ -21,7 +21,7 @@ tauri:
 	cd tauri-src/src-tauri && cargo build
 
 python:
-	uv sync --extra dev --extra data
+	uv sync --extra dev --extra data --extra gpu
 
 # Download a short Earth-centred Moon arc with JPL Horizons and convert it
 # into the solver's metres/seconds barycentric frame.  Writes:
@@ -45,7 +45,7 @@ kan:
 	uv run --extra data python -m ml.kan.run $(KAN_ARGS)
 
 test: cuda python
-	uv run --extra dev --extra data pytest -q tests ml
+	uv run --extra dev --extra data --extra gpu pytest -q tests ml
 	@if [ -f $(BUILD_DIR)/CTestTestfile.cmake ]; then ctest --test-dir $(BUILD_DIR) --output-on-failure; else echo "No CTest file found, skipping C++ tests."; fi
 	@if [ -f Cargo.toml ]; then cargo test --workspace; fi
 
@@ -54,7 +54,7 @@ test: cuda python
 test-cpu:
 	SKIP_CUDA_TESTS=1 cmake -S . -B $(BUILD_CPU_DIR) -DBUILD_TESTING=ON -DSKIP_CUDA_TESTS=ON
 	SKIP_CUDA_TESTS=1 cmake --build $(BUILD_CPU_DIR) -j
-	SKIP_CUDA_TESTS=1 uv run --extra dev --extra data pytest -q tests ml
+	SKIP_CUDA_TESTS=1 uv run --extra dev --extra data --extra gpu pytest -q tests ml
 	@if [ -f $(BUILD_CPU_DIR)/CTestTestfile.cmake ]; then ctest --test-dir $(BUILD_CPU_DIR) --output-on-failure; else echo "No CTest file found, skipping C++ tests."; fi
 	cargo test --workspace
 
@@ -70,7 +70,7 @@ bench:
 test-cuda:
 	SKIP_CUDA_TESTS=0 cmake -S . -B $(BUILD_DIR) -DBUILD_TESTING=ON
 	SKIP_CUDA_TESTS=0 cmake --build $(BUILD_DIR) -j
-	SKIP_CUDA_TESTS=0 uv run --extra dev --extra data pytest -q tests ml
+	SKIP_CUDA_TESTS=0 uv run --extra dev --extra data --extra gpu pytest -q tests ml
 	@if [ -f $(BUILD_DIR)/CTestTestfile.cmake ]; then ctest --test-dir $(BUILD_DIR) --output-on-failure; else echo "No CTest file found, skipping C++ tests."; fi
 	SKIP_CUDA_TESTS=0 cargo test --workspace
 

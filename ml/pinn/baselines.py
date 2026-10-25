@@ -5,9 +5,16 @@ sparse regression.  Uses PyTorch for the MLP.
 import random
 from itertools import combinations_with_replacement
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
+
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+    nn = None
+    optim = None
 
 __all__ = [
     "MLP",
@@ -24,11 +31,13 @@ def mse(pred, target):
     target = np.asarray(target)
     return np.mean((pred - target)**2)
 
-class MLP(nn.Module):
+class MLP(nn.Module if HAS_TORCH else object):
     """Small fully-connected MLP trained with PyTorch.
     Maintains a list-of-lists interface for compatibility.
     """
     def __init__(self, dims, seed=0):
+        if not HAS_TORCH:
+            raise ImportError("PyTorch is required for the MLP baseline. Install with 'pip install .[gpu]' or 'uv sync --extra gpu'.")
         super().__init__()
         torch.manual_seed(seed)
         layers = []

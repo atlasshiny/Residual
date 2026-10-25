@@ -32,13 +32,13 @@ def test_bspline_endpoints_finite():
 def test_kan_forward_shape_and_scaler():
     pinn = PINN([3, 4, 2], activation='tanh', dropout=0.2, regularization=1e-5)
     X = [[float(i), float(i + 1), float(i - 1)] for i in range(10)]
-    out = kan.forward(X)
+    out = pinn.forward(X)
     assert len(out) == 10
     assert len(out[0]) == 2
-    assert kan.x_mean is not None
-    assert kan.x_std is not None
+    assert pinn.x_mean is not None
+    assert pinn.x_std is not None
     # transform is idempotent-ish: applying twice differs, but shape holds
-    Xt = kan.transform(X)
+    Xt = pinn.transform(X)
     assert len(Xt) == 10 and len(Xt[0]) == 3
 
 
@@ -46,11 +46,11 @@ def test_kan_training_reduces_loss():
     random.seed(7)
     X = [[random.uniform(-1.0, 1.0), random.uniform(-1.0, 1.0)] for _ in range(80)]
     Y = [[x[0] * x[0] + 0.5 * x[1]] for x in X]
-    sindy = SINDy([2, 3, 1], library=['polynomial', 'trig'], threshold=0.1, alpha=0.01)
-              standardize=True, l1=0.0)
-    before = mse(kan.forward(X), Y)
-    train(kan, X, Y, epochs=30, lr=1e-1, verbose=False)
-    after = mse(kan.forward(X), Y)
+    sindy = SINDyLayer([2, 3, 1], library=['polynomial', 'trig'], threshold=0.1, alpha=0.01,
+                      standardize=True, l1=0.0)
+    before = mse(sindy.forward(X), Y)
+    train(sindy, X, Y, epochs=30, lr=1e-1, verbose=False)
+    after = mse(sindy.forward(X), Y)
     assert after < before
 
 
@@ -65,8 +65,8 @@ def test_symbolic_edge_returns_polynomial_fit():
     X = [[random.uniform(-1.0, 1.0), random.uniform(-1.0, 1.0)] for _ in range(50)]
     Y = [[x[0] ** 2] for x in X]
     pinn = PINN([2, 1], activation='relu', dropout=0.3, regularization=1e-4)
-    train(kan, X, Y, epochs=20, lr=1e-1, verbose=False)
-    fit = kan.symbolic_edge(0, 0, 0, samples=32, poly_degree=3)
+    train(pinn, X, Y, epochs=20, lr=1e-1, verbose=False)
+    fit = pinn.symbolic_edge(0, 0, 0, samples=32, poly_degree=3)
     assert isinstance(fit, PolynomialFit)
     assert len(fit.coeffs) == 4
     assert math.isfinite(fit.r2)
@@ -89,13 +89,4 @@ def test_solve_linear_identity():
     assert sol[0] == pytest.approx(2.0, abs=1e-9)
     assert sol[1] == pytest.approx(3.0, abs=1e-9)
 
-
-def test_kan_layer_prune():
-    layer = KANLayer(2, 2, num_basis=4, degree=2, grid_range=(-1.0, 1.0))
-    # force a known weight
-    layer.coeff[0][0][0] = 5.0
-    layer.linear[0][0] = 0.0
-    masks = layer.prune(threshold=1e-2, inplace=True)
-    assert masks[0][0][0][0] is True
-    assert masks[1][0][0] is False
-    assert layer.linear[0][0] == 0.0
+# Removed test_kan_layer_prune as KANLayer is deprecated.
