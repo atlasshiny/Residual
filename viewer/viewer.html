@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Artemis II trajectory viewer</title>
+    <style>
+      :root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #04060b; color: #e6ebf5; }
+      canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+      .panel { position: fixed; z-index: 1; padding: 12px 14px; border: 1px solid #a0b4dc30; border-radius: 7px; background: #090d16d9; backdrop-filter: blur(8px); }
+      #hud { top: 14px; left: 14px; min-width: 230px; }
+      #hud h1 { margin: 0 0 8px; font-size: 15px; }
+      .row { display: flex; justify-content: space-between; gap: 18px; padding: 2px 0; color: #8d98ad; }
+      .row b { color: #e6ebf5; font-variant-numeric: tabular-nums; }
+      #paths { top: 14px; right: 14px; }
+      #paths label, #bar label { display: flex; align-items: center; gap: 7px; padding: 3px 0; cursor: pointer; }
+      #bar { right: 14px; bottom: 14px; left: 14px; display: flex; align-items: center; gap: 12px; }
+      #scrub { flex: 1; min-width: 100px; accent-color: #27d8ff; }
+      button, select { border: 1px solid #a0b4dc30; border-radius: 5px; padding: 6px 10px; background: #111a2b; color: inherit; font: inherit; cursor: pointer; }
+      #message { top: 50%; left: 50%; max-width: 440px; transform: translate(-50%, -50%); text-align: center; color: #bec8d9; }
+      #message[hidden] { display: none; }
+      @media (max-width: 650px) { #paths { top: auto; bottom: 82px; } #hud { min-width: 190px; } }
+    </style>
+    <script type="importmap">
+      { "imports": {
+        "three": "../tauri-src/src/vendor/three/three.module.js",
+        "three/addons/": "../tauri-src/src/vendor/three/examples/jsm/"
+      } }
+    </script>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <section id="hud" class="panel">
+      <h1>Artemis II</h1>
+      <div class="row">Mission time <b id="mission-time">—</b></div>
+      <div class="row">Earth to Moon <b id="earth-moon">—</b></div>
+      <div class="row">Sun data <b id="sun-status">loading</b></div>
+    </section>
+    <section id="paths" class="panel" aria-label="Visible trajectories"></section>
+    <div id="message" class="panel">Loading viewer_data.json…</div>
+    <div id="bar" class="panel">
+      <button id="play" type="button">Play</button>
+      <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Mission time" />
+      <label>Speed <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+      <button id="reset" type="button">Reset view</button>
+    </div>
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+      const canvas = document.querySelector("#view");
+      const message = document.querySelector("#message");
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x04060b);
+      const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.001, 10000);
+      camera.position.set(0, 300, 850);
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.target.set(0, 0, 0);
+      controls.minDistance = 8;
+      controls.maxDistance = 4000;
+
+      const ambient = new THREE.AmbientLight(0x8293bb, 0.55);
+      scene.add(ambient);
+      const sunlight = new THREE.DirectionalLight(0xffffff, 2.4);
+      sunlight.position.set(1, 0, 0);
+      scene.add(sunlight);
+
+      // Scene units are 1,000 km. The Sun marker is intentionally enlarged and
+      // kept at a convenient distance; its direction drives the lighting.
+      const sun = new THREE.Mesh(
+        new THREE.SphereGeometry(28, 32, 24),
+        new THREE.MeshBasicMaterial({ color: 0xffc65c })
+      );
+      const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+        color: 0xffa629, transparent: true, opacity: 0.22, depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }));
+      sunGlow.scale.set(115, 115, 1);
+      sun.add(sunGlow);
+      scene.add(sun);
+
+      const earth = new THREE.Mesh(
+        new THREE.SphereGeometry(6.371, 48, 32),
+        new THREE.MeshStandardMaterial({ color: 0x2866a6, roughness: 0.82, metalness: 0.02 })
+      );
+      scene.add(earth);
+      const moon = new THREE.Mesh(
+        new THREE.SphereGeometry(1.7374, 36, 24),
+        new THREE.MeshStandardMaterial({ color: 0xa8a49a, roughness: 1 })
+      );
+      scene.add(moon);
+
+      const pathObjects = new Map();
+      let data;
+      let frame = 0;
+      let playing = false;
+      let lastTime = 0;
+      let playClock = 0;
+      const scrub = document.querySelector("#scrub");
+      const fmt = (n) => Number.isFinite(n) ? `${n.toFixed(2)} km` : "—";
+
+      function makePath(name, points, index) {
+        const colors = { truth: 0xffffff, mlp: 0x27d8ff, pinn: 0xff9a2e, sindy: 0xe65be6 };
+        const color = colors[name] ?? new THREE.Color().setHSL((index * 0.19) % 1, 0.72, 0.62).getHex();
+        const geometry = new THREE.BufferGeometry().setFromPoints(
+          points.map((p) => new THREE.Vector3(p[0] / 1000, p[1] / 1000, p[2] / 1000))
+        );
+        const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 }));
+        scene.add(line);
+        pathObjects.set(name, line);
+
+        const label = document.createElement("label");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = true;
+        checkbox.addEventListener("change", () => { line.visible = checkbox.checked; });
+        const swatch = document.createElement("span");
+        swatch.style.cssText = `display:inline-block;width:16px;height:3px;background:#${color.toString(16).padStart(6, "0")}`;
+        label.append(checkbox, swatch, document.createTextNode(name));
+        document.querySelector("#paths").append(label);
+      }
+
+      function setFrame(index) {
+        if (!data) return;
+        frame = Math.max(0, Math.min(data.t.length - 1, index));
+        scrub.value = String(frame);
+        const earthPos = data.earth ?? [0, 0, 0];
+        const moonPos = data.moon[frame];
+        earth.position.set(...earthPos.map((v) => v / 1000));
+        moon.position.set(...moonPos.map((v) => v / 1000));
+
+        // sun_dir is a unit direction from Earth toward the Sun. Older data
+        // files have no Sun samples, so keep a clearly labeled +X fallback.
+        const sunDir = data.sun_dir?.[frame] ?? [1, 0, 0];
+        const direction = new THREE.Vector3(...sunDir).normalize();
+        sunlight.position.copy(direction);
+        sun.position.copy(earth.position).addScaledVector(direction, 920);
+        document.querySelector("#mission-time").textContent = `${data.t[frame]} s`;
+        document.querySelector("#earth-moon").textContent = fmt(new THREE.Vector3(...moonPos).distanceTo(new THREE.Vector3(...earthPos)));
+        document.querySelector("#sun-status").textContent = data.sun_dir?.length ? "ephemeris" : "default direction";
+      }
+
+      async function loadData(source = "./viewer_data.json") {
+        try {
+          const response = await fetch(source);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          data = await response.json();
+          if (!Array.isArray(data.t) || !Array.isArray(data.moon) || !data.moon.length) throw new Error("Missing trajectory samples");
+          scrub.max = String(data.t.length - 1);
+          Object.entries(data.paths ?? {}).forEach(([name, points], i) => makePath(name, points, i));
+          setFrame(0);
+          message.hidden = true;
+        } catch (error) {
+          message.hidden = false;
+          message.innerHTML = `Could not load <code>${source}</code>: ${error.message}<br>Serve this directory over HTTP and open <code>viewer.html</code>.`;
+        }
+      }
+
+      scrub.addEventListener("input", () => setFrame(Number(scrub.value)));
+      document.querySelector("#play").addEventListener("click", (event) => {
+        playing = !playing;
+        event.currentTarget.textContent = playing ? "Pause" : "Play";
+      });
+      document.querySelector("#reset").addEventListener("click", () => {
+        camera.position.set(0, 300, 850);
+        controls.target.set(0, 0, 0);
+        controls.update();
+      });
+      addEventListener("resize", () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      });
+
+      function animate(now) {
+        requestAnimationFrame(animate);
+        const dt = Math.min((now - (lastTime || now)) / 1000, 0.1);
+        lastTime = now;
+        if (playing && data?.t?.length > 1) {
+          playClock += dt * Number(document.querySelector("#speed").value);
+          if (playClock >= 0.12) {
+            const steps = Math.floor(playClock / 0.12);
+            playClock %= 0.12;
+            setFrame((frame + steps) % data.t.length);
+          }
+        }
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      loadData();
+      requestAnimationFrame(animate);
+    </script>
+  </body>
+</html>
