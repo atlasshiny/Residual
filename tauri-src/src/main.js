@@ -522,10 +522,12 @@ function updateBodyGeometry(radius) {
   moonLabel.scale.set(R * 0.13, R * 0.065, 1);
   moonLabel.position.set(0, R * (MOON_DISPLAY * 1.6 + 0.03), 0);
 
-  craftBody.scale.setScalar(R * 0.006);
-  craftGlow.scale.setScalar(R * 0.03);
-  craftLabel.scale.set(R * 0.11, R * 0.055, 1);
-  craftLabel.position.set(0, R * 0.05, 0);
+  if (typeof craftBody !== "undefined" && craftBody) craftBody.scale.setScalar(R * 0.006);
+  if (typeof craftGlow !== "undefined" && craftGlow) craftGlow.scale.setScalar(R * 0.03);
+  if (typeof craftLabel !== "undefined" && craftLabel) {
+    craftLabel.scale.set(R * 0.11, R * 0.055, 1);
+    craftLabel.position.set(0, R * 0.05, 0);
+  }
 
   starGroup.scale.setScalar(R * 8);
 }
