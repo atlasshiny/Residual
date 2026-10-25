@@ -2,14 +2,13 @@
 sparse regression.  Uses PyTorch for the MLP.
 """
 
-import random
 from itertools import combinations_with_replacement
+
 import numpy as np
 
 try:
     import torch
-    import torch.nn as nn
-    import torch.optim as optim
+    from torch import nn, optim
 
     HAS_TORCH = True
 except ImportError:

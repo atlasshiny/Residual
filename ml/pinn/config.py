@@ -10,7 +10,7 @@ Usage:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 try:
     import yaml
@@ -24,11 +24,11 @@ except ImportError as exc:  # pragma: no cover
 
 
 class PipelineConfig(BaseModel):
-    data: Optional[str] = None
-    features: Optional[str] = None
-    targets: Optional[str] = None
-    mission: Optional[str] = None
-    time_col: Optional[str] = None
+    data: str | None = None
+    features: str | None = None
+    targets: str | None = None
+    mission: str | None = None
+    time_col: str | None = None
     test_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
     epochs: int = Field(default=150, ge=1)
     lr: float = Field(default=5e-2, gt=0.0)

@@ -14,18 +14,18 @@ from .pinn import PINN, train_pinn
 from .run import build_parser, run
 
 __all__ = [
-    "PINN",
-    "train_pinn",
     "MLP",
+    "PINN",
     "_poly_features",
+    "apply_burn_mask",
     "baseline_mse",
+    "build_parser",
+    "burn_keep_mask",
     "poly_terms",
     "poly_transform",
+    "run",
     "sindy",
     "sindy_predict",
     "train",
-    "apply_burn_mask",
-    "burn_keep_mask",
-    "build_parser",
-    "run",
+    "train_pinn",
 ]

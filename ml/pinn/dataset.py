@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "apply_burn_mask",
     "build_xy",
     "burn_keep_mask",
-    "apply_burn_mask",
     "load_residual_table",
     "resolve_time_column",
     "resolve_times",
