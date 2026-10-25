@@ -78,13 +78,8 @@ scene.fog = new THREE.FogExp2(0x050816, 0.00002);
 const camera = new THREE.PerspectiveCamera(55, 1, 1, 10000000);
 camera.position.set(0, 6000, 22000);
 
-const renderer = new THREE.WebGLRenderer({
-  antialias: false,
-  alpha: false,
-  stencil: false,
-  powerPreference: "high-performance",
-});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(10, 10);
 viewport.appendChild(renderer.domElement);
 
@@ -95,7 +90,6 @@ viewport.appendChild(renderer.domElement);
    This keeps idle CPU/GPU near zero, which matters most on low-end machines
    and battery-powered laptops. */
 let needsRender = true;
-let cameraMoving = false;
 let windowFocused = !document.hidden;
 function requestRender() {
   needsRender = true;
@@ -1659,11 +1653,7 @@ function animate(now) {
   // (damping / auto-rotate) and false once the view has settled.  Skip it
   // entirely when the window is unfocused so auto-rotate doesn't silently
   // keep moving the camera in the background.
-  const interacting = controls.state !== -1;
-  const shouldUpdateControls =
-    windowFocused && (interacting || controls.autoRotate || cameraMoving);
-  const cameraMoved = shouldUpdateControls ? controls.update() : false;
-  cameraMoving = cameraMoved;
+  const cameraMoved = windowFocused ? controls.update() : false;
   const playing = orbitPlaying && (trajectoryData?.points?.length ?? 0) > 1;
   if (playing && windowFocused) updateOrbitPlayback(dt);
 
