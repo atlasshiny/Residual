@@ -12,7 +12,7 @@ from ml.pinn.run import build_parser, run
 
 def _parse(out, *extra, epochs=2):
     return build_parser().parse_args(
-        ["--epochs", str(epochs), "--out", str(out), *extra]
+        ["--out", str(out), *extra]
     )
 
 

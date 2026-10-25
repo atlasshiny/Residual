@@ -38,6 +38,10 @@ def test_poly_transform():
     assert vals[1] == pytest.approx(3.0)  # x1
 
 
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("torch") is None,
+    reason="PyTorch not installed (needs --extra gpu)",
+)
 def test_mlp_forward_shape_and_training():
     random.seed(1)
     mlp = MLP([2, 4, 1])
