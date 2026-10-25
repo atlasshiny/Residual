@@ -37,5 +37,3 @@ The target remains the residual vector (`drx, dry, drz, dvx, dvy, dvz`).
 
 Lanes A and B share run.py? Lane B touches run.py only; Lane A touches features.py + dataset.py.
 Lane C touches tests only. No write-scope overlap.
-EOF
-echo written

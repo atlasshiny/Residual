@@ -20,5 +20,3 @@ orbital transfers and correction maneuvers, making it useful for mission design.
 
 ## Agents
 - Single lane: implement in .cuh, .cu, lib.rs. Small, well-defined.
-EOF
-echo written
