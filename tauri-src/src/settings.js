@@ -9,12 +9,11 @@ export const DEFAULTS = Object.freeze({
   pinnPath: "./data/pinn_result.json",
   predictionsPath: "./data/pinn_predictions.json",
   manifestPath: "./data/manifest.json",
-  jobDir: "./data/demo_job/",
 
   /* display */
   theme: "dark", // "dark" | "light"
+  autoRotate: false,
   showTrajectory: true,
-  showCosmosFrames: true,
   playbackSpeed: 1,
 
   /* propagation params (re-run hints; not used by the viewer itself) */

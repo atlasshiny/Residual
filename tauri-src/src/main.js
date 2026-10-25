@@ -33,13 +33,6 @@ const provenanceEl = document.getElementById("provenance");
 const orbitSlider = document.getElementById("orbit-slider");
 const orbitPlayBtn = document.getElementById("orbit-play");
 const orbitTimeEl = document.getElementById("orbit-time");
-const filmstripEl = document.getElementById("filmstrip");
-const jobBaseInput = document.getElementById("job-base");
-const scanJobsBtn = document.getElementById("scan-jobs-btn");
-const jobListEl = document.getElementById("job-list");
-const cosmosMetricsEl = document.getElementById("cosmos-metrics");
-const exportSnapshotBtn = document.getElementById("export-snapshot-btn");
-const exportReportBtn = document.getElementById("export-report-btn");
 const showRefCb = document.getElementById("show-ref");
 const showPropCb = document.getElementById("show-prop");
 const showCorrCb = document.getElementById("show-corr");
@@ -52,36 +45,12 @@ let ensemblePoints = null;
 const pipelineLog = document.getElementById("pipeline-log");
 const pipelineDot = document.getElementById("pipeline-dot");
 const pipelineStatus = document.getElementById("pipeline-status");
-const pickFolderBtn = document.getElementById("pick-folder-btn");
 
 const tauri = window.__TAURI__ || null;
 const hasBackend = !!tauri?.core?.invoke;
 async function invokeCmd(name, args) {
   if (!hasBackend) throw new Error("Tauri backend unavailable (running in browser?)");
   return tauri.core.invoke(name, args || {});
-}
-async function openFolderDialog() {
-  try {
-    return await invokeCmd("pick_folder");
-  } catch {
-    return null;
-  }
-}
-function isLocalPath(p) {
-  return /^([a-zA-Z]:[\\/]|\/|\\\\)/.test(p);
-}
-async function loadJobFromPath(dir) {
-  const names = await invokeCmd("list_dir", { path: dir });
-  const files = [];
-  for (const name of names) {
-    if (!name.toLowerCase().endsWith(".json")) continue;
-    const text = await invokeCmd("read_text_file", {
-      path: `${dir.replace(/[\\/]+$/, "")}/${name}`,
-    });
-    files.push(new File([text], name, { type: "application/json" }));
-  }
-  if (!files.length) throw new Error(`no JSON files in ${dir}`);
-  return loadJobFromFiles(files);
 }
 
 // data globals
@@ -93,7 +62,6 @@ let residualHoverIdx = -1;
 let residualChart = {};
 let orbitPlaying = false;
 let orbitAcc = 0;
-let orbitLastTick = null;
 let traveledLine = null;
 let traveledTubeRef = null;
 let trajectoryData = null;
@@ -102,30 +70,6 @@ let orbitPlane = null;
 let ensembleEpoch = -1;
 const resetViewBtn = document.getElementById("reset-view");
 const topViewBtn = document.getElementById("top-view");
-
-/* cosmos viewer */
-const modeTabs = document.getElementById("mode-tabs");
-const cosmosStatus = document.getElementById("cosmos-status");
-const cosmosDot = document.getElementById("cosmos-dot");
-const cosmosKv = document.getElementById("cosmos-kv");
-const frameInfo = document.getElementById("cosmos-frame-info");
-const frameEmptyNote = document.getElementById("frame-empty-note");
-const frameMeta = document.getElementById("cosmos-frame-meta");
-const poseMatrix = document.getElementById("cosmos-pose-matrix");
-const manifestRaw = document.getElementById("cosmos-manifest-raw");
-const loadJobBtn = document.getElementById("load-job-btn");
-const loadDemoBtn = document.getElementById("load-demo-btn");
-const jobDirInput = document.getElementById("job-dir-input");
-const scrubber = document.getElementById("scrubber");
-const playBtn = document.getElementById("play-btn");
-const frameSlider = document.getElementById("frame-slider");
-const frameLabel = document.getElementById("frame-label");
-const timeLabel = document.getElementById("time-label");
-const scrubProgress = document.getElementById("scrub-progress");
-const scrubThumb = document.getElementById("scrub-thumb");
-const frameRender = document.getElementById("frame-render");
-const frameImg = document.getElementById("frame-img");
-const frameRenderLabel = document.getElementById("frame-render-label");
 
 /* ---------------- Scene ---------------- */
 const scene = new THREE.Scene();
@@ -138,6 +82,96 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(10, 10);
 viewport.appendChild(renderer.domElement);
+
+/* ---------------- Render scheduling ----------------
+   The viewer used to render every animation frame forever, even with a static
+   camera and auto-rotate off.  Now a frame is drawn only when something
+   actually changed (camera movement, playback, data load, resize, toggles).
+   This keeps idle CPU/GPU near zero, which matters most on low-end machines
+   and battery-powered laptops. */
+let needsRender = true;
+let windowFocused = !document.hidden;
+function requestRender() {
+  needsRender = true;
+}
+
+function setAutoRotate(on) {
+  controls.autoRotate = !!on;
+  if (autoRotateCb.checked !== !!on) autoRotateCb.checked = !!on;
+  settings.autoRotate = !!on;
+  requestRender();
+}
+
+/* Explain whether WebGL is running on real hardware.  Software rendering
+   (llvmpipe / SwiftShader) is the usual reason a WebGL app feels slow. */
+const glContext = renderer.getContext();
+const gpuRenderer = (() => {
+  try {
+    const dbg = glContext.getExtension("WEBGL_debug_renderer_info");
+    return String(
+      dbg ? glContext.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : glContext.getParameter(glContext.RENDERER)
+    );
+  } catch {
+    return "unknown";
+  }
+})();
+const softwareGl = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(gpuRenderer);
+console.info(`[residual] WebGL renderer: ${gpuRenderer}${softwareGl ? " (software rendering — perf will be limited)" : ""}`);
+
+/* ---------------- Perf HUD (dev) ----------------
+   Toggle with Ctrl+Shift+P, persist with localStorage["residual-perf"]="1",
+   or open the page with ?perf=1.  Shows the numbers needed to verify the
+   render-on-demand / device-tier work without a profiler attached. */
+const PERF_HUD_KEY = "residual-perf";
+const bootStart = performance.now();
+let bootReadyMs = null;
+const perfHud = document.getElementById("perf-hud");
+let perfVisible = (() => {
+  try {
+    return localStorage.getItem(PERF_HUD_KEY) === "1" || /(?:^|[?&])perf(?:=1)?(?:&|$)/.test(location.search);
+  } catch {
+    return false;
+  }
+})();
+let perfFrames = 0;
+let perfWindowStart = performance.now();
+let perfFps = 0;
+let perfDrawMs = 0;
+
+function setPerfVisible(on) {
+  perfVisible = !!on;
+  if (perfHud) perfHud.hidden = !perfVisible;
+  try {
+    localStorage.setItem(PERF_HUD_KEY, perfVisible ? "1" : "0");
+  } catch {
+    /* storage unavailable */
+  }
+  requestRender();
+}
+
+function updatePerfHud(now, drawMs) {
+  if (!perfHud || !perfVisible) return;
+  perfDrawMs = perfDrawMs * 0.85 + drawMs * 0.15;
+  perfFrames++;
+  if (now - perfWindowStart < 500) return;
+  perfFps = (perfFrames * 1000) / (now - perfWindowStart);
+  perfFrames = 0;
+  perfWindowStart = now;
+  const info = renderer.info.render;
+  const boot = bootReadyMs == null ? "…" : `${Math.round(bootReadyMs)}ms`;
+  perfHud.textContent =
+    `${perfFps.toFixed(0)} fps · ${perfDrawMs.toFixed(1)} ms · ` +
+    `${info.calls} calls · ${(info.triangles / 1000).toFixed(1)}k tris · ` +
+    `dpr ${renderer.getPixelRatio().toFixed(2)} · boot ${boot}\n${gpuRenderer}`;
+}
+
+window.addEventListener("keydown", (ev) => {
+  if (ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === "p") {
+    ev.preventDefault();
+    setPerfVisible(!perfVisible);
+  }
+});
+if (perfVisible && perfHud) perfHud.hidden = false;
 
 /* lighting */
 const ambient = new THREE.AmbientLight(0x334466, 0.6);
@@ -384,11 +418,6 @@ scene.add(axes);
 const trajGroup = new THREE.Group();
 scene.add(trajGroup);
 
-/* cosmos pose container */
-const cosmosGroup = new THREE.Group();
-cosmosGroup.visible = false;
-scene.add(cosmosGroup);
-
 /* controls */
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -430,22 +459,7 @@ function fitCameraToTrajectory(radius) {
   applySceneScale(R);
   updateSunGeometry(R);
   updateBodyGeometry(R);
-}
-function fitCameraToCosmos() {
-  // Poses were already rescaled into the scene by buildCosmosScene().
-  let R = EARTH_RADIUS * 1.5;
-  for (const p of cosmos.poses || []) {
-    const v = p.position;
-    if (v) R = Math.max(R, Math.hypot(v.x, v.y, v.z));
-  }
-  camera.near = Math.max(0.5, R * 0.00002);
-  camera.far = Math.max(camera.far, R * 20);
-  camera.updateProjectionMatrix();
-  controls.minDistance = R * 0.05;
-  controls.maxDistance = R * 20;
-  camera.position.set(R * 0.35, R * 1.0, R * 2.0);
-  controls.target.set(0, 0, 0);
-  controls.update();
+  requestRender();
 }
 
 /* Frame the arc straight down the orbit normal — the 2D framing used by
@@ -469,6 +483,7 @@ function fitCameraTopDown() {
   camera.position.copy(normal).multiplyScalar(R * 2.35);
   controls.target.set(0, 0, 0);
   controls.update();
+  requestRender();
 }
 
 /* Re-lay the Sun marker for the current scene scale.  The bundle stores unit
@@ -522,12 +537,12 @@ function applySunSample(index) {
 }
 
 function setOrbitPropsVisible() {
-  const orbit = mode === "orbit";
-  sunGroup.visible = orbit && !!showSunCb?.checked && sunAvailable;
+  sunGroup.visible = !!showSunCb?.checked && sunAvailable;
   sunBeam.visible = sunGroup.visible;
-  starGroup.visible = orbit;
-  earthLabel.visible = orbit;
-  moonGroup.visible = orbit && !!trajectoryData?.points?.length;
+  starGroup.visible = true;
+  earthLabel.visible = true;
+  moonGroup.visible = !!trajectoryData?.points?.length;
+  requestRender();
 }
 
 /* ---------------- helpers ---------------- */
@@ -595,6 +610,7 @@ function resize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  requestRender();
 }
 window.addEventListener("resize", resize);
 
@@ -606,6 +622,9 @@ let pinnFailed = false;
 let settledCount = 0;
 function settle() {
   settledCount++;
+  if (trajectoryLoaded && pinnLoaded && bootReadyMs == null) {
+    bootReadyMs = performance.now() - bootStart;
+  }
   if (settledCount >= 2) setLoading(false);
 }
 
@@ -996,9 +1015,9 @@ function renderEnsembleEpoch(idx, { force = false } = {}) {
     ensemblePoints.material?.dispose();
     ensemblePoints = null;
   }
-  if (!showEnsembleCb?.checked) return;
+  if (!showEnsembleCb?.checked) { requestRender(); return; }
   const cloud = ensembleData.clouds?.[idx];
-  if (!Array.isArray(cloud)) return;
+  if (!Array.isArray(cloud)) { requestRender(); return; }
   const positions = new Float32Array(cloud.length * 3);
   for (let i = 0; i < cloud.length; i++) {
     positions[i*3] = cloud[i][0] / 1000;
@@ -1016,6 +1035,7 @@ function renderEnsembleEpoch(idx, { force = false } = {}) {
   });
   ensemblePoints = new THREE.Points(geo, mat);
   trajGroup.add(ensemblePoints);
+  requestRender();
 }
 
 async function loadPredictions() {
@@ -1220,534 +1240,49 @@ function drawGuide(idx) {
   ctx.fillText("Moon", mp[0]+6, mp[1]);
 }
 
-function maybeFinishLoading() {
-  if (trajectoryLoaded && pinnLoaded) {
-    setLoading(false);
-    sceneStatus.textContent = "Scene ready";
-  }
-}
-
-/* ================================================================
-   Cosmos job viewer
-   ================================================================ */
-const COSMOS_ACCENT = 0x22d3ee;
-const COSMOS_ACCENT_SOFT = 0x0e7490;
-const cosmos = {
-  job: null,
-  outputs: null,
-  manifest: null,
-  loaded: false,
-  frames: 0,
-  fps: 24,
-  times: [],
-  poses: [],          // { position: Vector3(scene units), quat: Quaternion, posKm: Vector3 }
-  current: 0,
-  playing: false,
-  playAcc: 0,
-  lastTick: null,
-  images: [],         // { frame, name, url } for the rendered-frame preview
-  blobURLs: new Set(),
-};
-
-function m3FromColumns(c0, c1, c2) {
-  // columns are camera axes (OpenCV: +Z forward, +X right, +Y down)
-  return new THREE.Matrix4().set(
-    c0.x, c1.x, c2.x, 0,
-    c0.y, c1.y, c2.y, 0,
-    c0.z, c1.z, c2.z, 0,
-    0, 0, 0, 1
-  );
-}
-function orthonormalize(c0, c1) {
-  const x = c0.clone().normalize();
-  let y = c1.clone().sub(x.clone().multiplyScalar(c1.dot(x))).normalize();
-  let z = new THREE.Vector3().crossVectors(x, y).normalize();
-  // re-orthogonalize against z to guard numerical drift
-  y = new THREE.Vector3().crossVectors(z, x).normalize();
-  return [x, y, z];
-}
-
-/* Integrate relative 9D actions from first_pose into absolute per-frame poses. */
-function integratePoses(job, outputs) {
-  const units = outputs.translation_unit || "cosmos_metre";
-  const k = Number(outputs.scale_k_km_per_m || job.scale_k_km_per_m || 1000) || 1000;
-  const kmPerUnit = units === "cosmos_metre" ? k : 1; // translation rows in cosmos metres -> km
-
-  const fp = outputs.first_pose || job.first_pose || null;
-  if (!fp || !fp.rotation || !fp.translation_km) {
-    throw new Error("No first_pose in job/sample_outputs — cannot reconstruct poses");
-  }
-  const rows = outputs.poses || [];
-  if (!Array.isArray(rows) || rows.length === 0) {
-    throw new Error("sample_outputs.json has an empty poses array");
-  }
-
-  const c0 = new THREE.Vector3(fp.rotation[0][0], fp.rotation[1][0], fp.rotation[2][0]);
-  const c1 = new THREE.Vector3(fp.rotation[0][1], fp.rotation[1][1], fp.rotation[2][1]);
-  const [ax, ay, az] = orthonormalize(c0, c1);
-  let R = m3FromColumns(ax, ay, az);
-  let p = new THREE.Vector3(...fp.translation_km);
-
-  const fps = Number(outputs.fps || job.fps || 24);
-  const times = Array.isArray(job.frame_times_tdb_s) && job.frame_times_tdb_s.length
-    ? job.frame_times_tdb_s.slice(0, rows.length + 1)
-    : Array.from({ length: rows.length + 1 }, (_, i) => (job.window?.t0_tdb ?? 0) + i / fps);
-
-  const out = [{ position: p.clone(), quat: new THREE.Quaternion().setFromRotationMatrix(R), posKm: p.clone() }];
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    if (!Array.isArray(row) || row.length !== 9) throw new Error(`Pose row ${i} is not 9 values`);
-    const dT = new THREE.Vector3(row[0] * kmPerUnit, row[1] * kmPerUnit, row[2] * kmPerUnit);
-    const relC0 = new THREE.Vector3(row[3], row[4], row[5]);
-    const relC1 = new THREE.Vector3(row[6], row[7], row[8]);
-    const [rx, ry, rz] = orthonormalize(relC0, relC1);
-    const Rrel = m3FromColumns(rx, ry, rz);
-
-    p = p.clone().add(dT.applyMatrix3(new THREE.Matrix3().setFromMatrix4(R)));
-    R = new THREE.Matrix4().multiplyMatrices(R, Rrel);
-
-    out.push({
-      position: p.clone(),
-      quat: new THREE.Quaternion().setFromRotationMatrix(R),
-      posKm: p.clone(),
-    });
-  }
-  return { poses: out, fps, times };
-}
-
-function buildFrustumGeometry(poses, scale) {
-  // every frame gets a faint glyph; drawn as one LineSegments
-  const pts = [];
-  const f = scale * 0.35, s = scale * 0.18;
-  for (const pose of poses) {
-    const q = pose.quat;
-    const x = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
-    const y = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
-    const z = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
-    const p = pose.position;
-    const corner = (dx, dy) => new THREE.Vector3().copy(p)
-      .add(z.clone().multiplyScalar(f)).add(x.clone().multiplyScalar(dx * s)).add(y.clone().multiplyScalar(dy * s));
-    const c = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
-    // frustum edges
-    c.forEach((cc) => pts.push(p.clone(), cc));
-    // frame border
-    for (let i = 0; i < 4; i++) pts.push(c[i], c[(i + 1) % 4]);
-  }
-  const geo = new THREE.BufferGeometry().setFromPoints(pts);
-  const mat = new THREE.LineBasicMaterial({ color: COSMOS_ACCENT_SOFT, transparent: true, opacity: 0.28 });
-  return new THREE.LineSegments(geo, mat);
-}
-
-function pathGeometryFor(poses) {
-  return new THREE.BufferGeometry().setFromPoints(poses.map((pp) => pp.position));
-}
-
-function setCosmosDot(state) { setDot(cosmosDot, state); }
-
-function fmtTime(t) {
-  return t == null || !Number.isFinite(floatOf(t)) ? "—" : `${floatOf(t).toFixed(4)} s`;
-}
-function floatOf(v) { return typeof v === "number" ? v : parseFloat(v); }
-
-function updateFrameUI(idx) {
-  const pose = cosmos.poses[idx];
-  const n = cosmos.frames;
-  frameSlider.value = String(idx);
-  const sliderMax = Number(frameSlider.max) || Math.max(n - 1, 1);
-  const frac = sliderMax > 0 ? idx / sliderMax : 0;
-  scrubProgress.style.width = `${(frac * 100).toFixed(2)}%`;
-  scrubThumb.style.left = `${(frac * 100).toFixed(2)}%`;
-  frameLabel.innerHTML = `frame <b>${String(idx).padStart(3, "0")}</b> / ${String(n - 1).padStart(3, "0")}`;
-  timeLabel.textContent = `t = ${fmtTime(cosmos.times[idx])} · fps ${cosmos.fps}`;
-
-  if (pose) {
-    frameEmptyNote?.classList.add("is-hidden");
-    const r = pose.posKm.length();
-    const px = pose.posKm.x, py = pose.posKm.y, pz = pose.posKm.z;
-    frameMeta.innerHTML = "";
-    const pairs = [
-      ["Position (km)", `${px.toFixed(1)}, ${py.toFixed(1)}, ${pz.toFixed(1)}`],
-      ["Radius", `${r.toFixed(1)} km`],
-    ];
-    for (const [kKey, v] of pairs) {
-      const dt = document.createElement("dt"); dt.textContent = kKey;
-      const dd = document.createElement("dd"); dd.textContent = v;
-      frameMeta.appendChild(dt); frameMeta.appendChild(dd);
-    }
-
-    // camera basis display: columns = camera axes (+Z forward, +X right, +Y down)
-    const bx = new THREE.Vector3(1, 0, 0).applyQuaternion(pose.quat);
-    const by = new THREE.Vector3(0, 1, 0).applyQuaternion(pose.quat);
-    const bz = new THREE.Vector3(0, 0, 1).applyQuaternion(pose.quat);
-    const fmtCell = (v) => (Math.abs(v) < 0.001 ? " 0 " : v.toFixed(2));
-    const mGrid = [
-      [bx.x, by.x, bz.x],
-      [bx.y, by.y, bz.y],
-      [bx.z, by.z, bz.z],
-    ];
-    poseMatrix.innerHTML = mGrid
-      .map((rr) => `[ ${rr.map(fmtCell).join("  ")} ]`)
-      .join("\n");
-
-    if (currentPoseHighlight) {
-      currentPoseHighlight.position.copy(pose.position);
-      currentPoseHighlight.quaternion.copy(pose.quat);
-      currentPoseHighlight.visible = true;
-    }
-    if (currentFrustum) {
-      const f = poseScale * 0.35, s = poseScale * 0.18;
-      const x = new THREE.Vector3(1, 0, 0).applyQuaternion(pose.quat);
-      const y = new THREE.Vector3(0, 1, 0).applyQuaternion(pose.quat);
-      const z = new THREE.Vector3(0, 0, 1).applyQuaternion(pose.quat);
-      const corner = (dx, dy) => new THREE.Vector3().copy(pose.position)
-        .add(z.clone().multiplyScalar(f)).add(x.clone().multiplyScalar(dx * s)).add(y.clone().multiplyScalar(dy * s));
-      const cc = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
-      const pts = [];
-      cc.forEach((c2) => pts.push(pose.position.clone(), c2));
-      for (let i = 0; i < 4; i++) pts.push(cc[i], cc[(i + 1) % 4]);
-      currentFrustum.geometry.setFromPoints(pts);
-    }
-  }
-
-  updateFrameImage(idx);
-}
-
-function updateFrameImage(idx) {
-  const img = cosmos.images.find((im) => im.frame === idx);
-  if (img && img.url) {
-    if (frameImg.src !== img.url) frameImg.src = img.url;
-    frameRenderLabel.textContent = img.name;
-    frameRender.classList.remove("is-hidden");
-  } else {
-    frameRender.classList.add("is-hidden");
-  }
-}
-
-function destroyCosmosScene() {
-  cosmosGroup.traverse((obj) => {
-    if (obj.geometry) obj.geometry.dispose();
-    if (obj.material) obj.material.dispose?.();
-  });
-  cosmosGroup.clear();
-  currentPoseHighlight = null;
-  currentFrustum = null;
-  for (const url of cosmos.blobURLs) URL.revokeObjectURL(url);
-  cosmos.blobURLs.clear();
-  cosmos.images = [];
-  frameRender.classList.add("is-hidden");
-}
-
-function fillCosmosInfo(job, outputs, manifest) {
-  cosmosKv.innerHTML = "";
-  const rows = [
-    ["Job", job.job_id || job.id || "—"],
-    ["Mode", job.mode || outputs?.mode || "—"],
-    ["Model", job.model || outputs?.model || "—"],
-    ["Frames", job.frames ?? "—"],
-    ["FPS", job.fps ?? "—"],
-    ["Pointing", job.pointing_law || outputs?.pointing_law || "—"],
-    ["Scale k", fmt(job.scale_k_km_per_m, 1)],
-    ["Resolution", Array.isArray(job.resolution) ? job.resolution.join(" × ") : "—"],
-    ["Seed", job.seed ?? "—"],
-    ["Window", job.window ? `${fmt(job.window.t0_tdb, 2)} – ${fmt(job.window.t1_tdb, 2)} s` : "—"],
-    ["Mock", outputs?.mock ? "yes" : "no"],
-  ];
-  for (const [kV, v] of rows) {
-    const dt = document.createElement("dt"); dt.textContent = kV;
-    const dd = document.createElement("dd"); dd.textContent = String(v);
-    cosmosKv.appendChild(dt); cosmosKv.appendChild(dd);
-  }
-  manifestRaw.textContent = manifest ? JSON.stringify(manifest, null, 2) : "// manifest.json not present in this directory";
-  const prevCard = stripMetrics.querySelector('[data-strip="cosmos-frames"]');
-  if (prevCard) prevCard.remove();
-  const jobCard = buildStripCard("Job frames", cosmos.frames, "accent");
-  jobCard.dataset.strip = "cosmos-frames";
-  stripMetrics.appendChild(jobCard);
-}
-
-/* Render the pose reconstruction into the shared 3D scene. */
-let poseScale = 1;
-let currentPoseHighlight = null;
-let currentFrustum = null;
-
-function buildCosmosScene(poses) {
-  const maxR = Math.max(...poses.map((pp) => pp.position.length()), 1e-3);
-  // fit the pose ring into the scene just outside the earth, like the orbit view
-  poseScale = (EARTH_RADIUS * 10) / maxR;
-  cosmosGroup.clear();
-  for (const pp of poses) pp.position = pp.posKm.clone().multiplyScalar(poseScale);
-
-  // faint path through every frame
-  cosmosGroup.add(new THREE.Line(pathGeometryFor(poses), new THREE.LineBasicMaterial({
-    color: COSMOS_ACCENT, transparent: true, opacity: 0.35,
-  })));
-
-  // dim frustum glyphs for every frame
-  cosmosGroup.add(buildFrustumGeometry(poses, poseScale));
-
-  // current-frame highlight frustum (its geometry is rewritten on scrub)
-  currentFrustum = new THREE.LineSegments(
-    new THREE.BufferGeometry(),
-    new THREE.LineBasicMaterial({ color: 0x67e8f9, transparent: false })
-  );
-  cosmosGroup.add(currentFrustum);
-
-  // camera position marker
-  currentPoseHighlight = new THREE.Mesh(
-    new THREE.SphereGeometry(poseScale * 0.05, 16, 16),
-    new THREE.MeshBasicMaterial({ color: 0xffffff })
-  );
-  cosmosGroup.add(currentPoseHighlight);
-}
-
-async function readJSON(fileLike, url) {
-  const res = url ? await fetch(url) : await fetch(fileLike);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  return JSON.parse(text);
-}
-
-async function applyCosmosJob({ job, outputs, manifest, dirURLBase, dirFiles }) {
-  destroyCosmosScene();
-  try {
-    let integrated;
-    try {
-      integrated = integratePoses(job, outputs);
-    } catch (e) {
-      setCosmosDot("err");
-      cosmosStatus.textContent = `Pose reconstruction failed — ${e.message}`;
-      showError(`Cosmos job: ${e.message}`);
-      return false;
-    }
-
-    cosmos.job = job;
-    cosmos.outputs = outputs;
-    cosmos.manifest = manifest;
-    cosmos.poses = integrated.poses;
-    cosmos.frames = integrated.poses.length;
-    cosmos.fps = integrated.fps;
-    cosmos.times = integrated.times;
-    cosmos.current = 0;
-    cosmos.playing = false;
-    playBtn.textContent = "▶";
-    playBtn.classList.remove("is-playing");
-
-    // collect rendered-frame artifacts (image kind, or png/jpg names beside the job)
-    const isImageName = (n) => /\.(png|jpe?g|webp)$/i.test(n || "");
-    const frameOfName = (n) => {
-      const mm = /(?:^|[^0-9])0*(\d{1,4})[^0-9]*$/.exec(n || "");
-      return mm ? parseInt(mm[1], 10) : NaN;
-    };
-    if (dirFiles) {
-      for (const f of dirFiles) {
-        if (!isImageName(f.name)) continue;
-        const fr = frameOfName(f.name);
-        if (!Number.isNaN(fr) && fr < cosmos.frames) {
-          const url = URL.createObjectURL(f);
-          cosmos.blobURLs.add(url);
-          cosmos.images.push({ frame: fr, name: f.name, url });
-        }
-      }
-    } else if (manifest && Array.isArray(manifest.artifacts) && dirURLBase) {
-      for (const a of manifest.artifacts) {
-        if (!isImageName(a.path || a.name) || a.kind !== "image") continue;
-        const fr = frameOfName(a.path || a.name);
-        if (!Number.isNaN(fr) && fr < cosmos.frames) {
-          cosmos.images.push({ frame: fr, name: a.path || a.name, url: dirURLBase + (a.path || a.name).split("/").map(encodeURIComponent).join("/") });
-        }
-      }
-    }
-    cosmos.images.sort((a, b) => a.frame - b.frame);
-
-    buildCosmosScene(cosmos.poses);
-    fillCosmosInfo(job, outputs, manifest);
-
-    // load metrics.json if available
-    (async () => {
-      let metrics = null;
-      if (dirFiles) {
-        const m = dirFiles.find((f) => f.name === "metrics.json");
-        if (m) { try { metrics = JSON.parse(await m.text()); } catch {} }
-      } else if (dirURLBase) {
-        try { const r = await fetch(dirURLBase + "metrics.json"); if (r.ok) metrics = await r.json(); } catch {}
-      }
-      if (cosmosMetricsEl) {
-        cosmosMetricsEl.innerHTML = "";
-        if (metrics) {
-          const pairs = [
-            ["RRE", `${Number(metrics.rre_degrees).toFixed(4)} deg`],
-            ["RTE", `${Number(metrics.rte_metres).toFixed(2)} m`],
-            ["ATE", `${Number(metrics.ate_metres).toFixed(2)} m`],
-            ["Frames", metrics.frames],
-            ["Aligned", metrics.aligned ? "yes" : "no"],
-            ["Scale k", Number(metrics.scale_k_km_per_m).toFixed(1)],
-          ];
-          for (const [k, v] of pairs) {
-            const dt = document.createElement("dt"); dt.textContent = k;
-            const dd = document.createElement("dd"); dd.textContent = String(v);
-            cosmosMetricsEl.appendChild(dt); cosmosMetricsEl.appendChild(dd);
-          }
-        } else {
-          cosmosMetricsEl.innerHTML = "<dt>Metrics</dt><dd>not available (run evaluator)</dd>";
-        }
-      }
-    })();
-
-    // filmstrip
-    if (filmstripEl) {
-      filmstripEl.innerHTML = "";
-      for (const img of cosmos.images) {
-        const thumb = document.createElement("img");
-        thumb.src = img.url; thumb.alt = img.name; thumb.className = "film-thumb";
-        thumb.addEventListener("click", () => { cosmos.current = img.frame; updateFrameUI(img.frame); });
-        filmstripEl.appendChild(thumb);
-      }
-    }
-
-    frameSlider.max = String(cosmos.frames - 1);
-    frameSlider.value = "0";
-    cosmos.loaded = true;
-    cosmosStatus.textContent = `${job.job_id || job.id || "job"} · ${cosmos.frames} frames · pointing ${job.pointing_law || "—"}`;
-    setCosmosDot("ok");
-
-    scrubber.classList.toggle("is-hidden", mode !== "cosmos");
-    updateFrameUI(0);
-    if (mode === "cosmos") {
-      updateViewForMode();
-      fitCameraToCosmos();
-    }
-    return true;
-  } catch (error) {
-    setCosmosDot("err");
-    cosmosStatus.textContent = `Job loaded but rendering failed — ${error.message}`;
-    return false;
-  }
-}
-
-async function loadJobFromFiles(files) {
-  setCosmosDot("loading");
-  try {
-    const byName = (n) => files.find((f) => f.name === n);
-    if (!byName("job.json")) throw new Error("Selected folder has no job.json");
-    const job = await readJSON(byName("job.json"));
-    const outEntry = byName("sample_outputs.json");
-    const outputs = outEntry ? await readJSON(outEntry) : null;
-    const mnfEntry = byName("manifest.json");
-    const manifest = mnfEntry ? await readJSON(mnfEntry) : null;
-    if (!outputs) {
-      // job looks queued but unfinished — still show metadata, no poses
-      destroyCosmosScene();
-      cosmos.job = job; cosmos.outputs = null; cosmos.manifest = manifest;
-      cosmos.frames = job.frames ?? 0; cosmos.fps = job.fps ?? 24;
-      cosmos.times = job.frame_times_tdb_s?.slice() ?? [];
-      cosmos.poses = [];
-      cosmos.loaded = false;
-      fillCosmosInfo(job, outputs, manifest);
-      frameSlider.max = "0";
-      cosmosStatus.textContent = "No sample_outputs.json — job has not produced frames yet.";
-      setCosmosDot("loading");
-      scrubber.classList.add("is-hidden");
-      frameEmptyNote?.classList.remove("is-hidden");
-      return false;
-    }
-    await applyCosmosJob({ job, outputs, manifest, dirFiles: files });
-    return true;
-  } catch (error) {
-    setCosmosDot("err");
-    cosmosStatus.textContent = `Could not load job — ${error.message}`;
-    showError(`Cosmos job: ${error.message}`);
-    return false;
-  }
-}
-
-async function loadDemoJob() {
-  setCosmosDot("loading");
-  const base = settings.jobDir || "./data/demo_job/";
-  try {
-    const job = await readJSON(null, base + (base.endsWith("/") ? "" : "/") + "job.json");
-    const outputs = await readJSON(null, base + (base.endsWith("/") ? "" : "/") + "sample_outputs.json");
-    let manifest = null;
-    try { manifest = await readJSON(null, base + (base.endsWith("/") ? "" : "/") + "manifest.json"); } catch { /* demo manifest optional */ }
-    await applyCosmosJob({ job, outputs, manifest, dirURLBase: base.endsWith("/") ? base : base + "/" });
-  } catch (error) {
-    setCosmosDot("err");
-    cosmosStatus.textContent = `Job unavailable — ${base} (${error.message})`;
-    showError(`Cosmos job: "${base}" missing or invalid (${error.message})`);
-  }
-}
-
-/* ---------------- mode switching ---------------- */
-let mode = "orbit";
-function updateViewForMode() {
-  for (const tab of modeTabs.querySelectorAll(".mode-tab")) {
-    tab.classList.toggle("is-active", tab.dataset.mode === mode);
-  }
-  document.querySelectorAll("[data-mode-panel]").forEach((el) => {
-    const show = el.dataset.modePanel === mode;
-    el.classList.toggle("is-hidden", !show);
-  });
-  // The two modes live at very different scales (lunar arc vs. a pose ring
-  // around Earth), so grid size and zoom limits have to follow the mode.
-  if (mode === "cosmos") {
-    applySceneScale(EARTH_RADIUS * 10);
-    // Cosmos poses use the physical Earth, not the enlarged orbit-view marker.
-    earth.scale.setScalar(1);
-    atmosphere.scale.setScalar(1);
-    halo.scale.setScalar(1);
-    if (cosmos.loaded) fitCameraToCosmos();
-  } else if (trajRadius) {
-    applySceneScale(trajRadius);
-    updateSunGeometry(trajRadius);
-    updateBodyGeometry(trajRadius);
-    controls.minDistance = trajRadius * 0.02;
-    controls.maxDistance = trajRadius * 20;
-  }
-  trajGroup.visible = mode === "orbit" && settings.showTrajectory;
-  cosmosGroup.visible = mode === "cosmos" && cosmos.poses.length > 0 && settings.showCosmosFrames;
-  scrubber.classList.toggle("is-hidden", !(mode === "cosmos" && cosmos.loaded));
-  if (mode !== "cosmos") frameRender.classList.add("is-hidden");
-  else if (cosmos.loaded) updateFrameImage(cosmos.current);
+/* ---------------- view visibility ---------------- */
+/* The viewer only has the orbit mode now; this applies display settings
+   without re-running any camera framing or scene-scale work. */
+function applyViewSettings() {
+  trajGroup.visible = !!settings.showTrajectory;
   grid.visible = showGridCb.checked;
-  // The orbit view enlarges bodies and compresses the Sun distance; Cosmos
-  // frames are already to-scale renders, so the caption only applies here.
-  sceneCaption?.classList.toggle("is-hidden", mode !== "orbit");
+  axes.visible = showAxesCb.checked;
+  sceneCaption?.classList.remove("is-hidden");
   setOrbitPropsVisible();
+  requestRender();
 }
-modeTabs.addEventListener("click", (ev) => {
-  const tab = ev.target.closest(".mode-tab");
-  if (!tab || tab.dataset.mode === mode) return;
-  mode = tab.dataset.mode;
-  if (mode !== "cosmos") stopPlayback();
-  updateViewForMode();
-});
 
-/* ---------------- scrubber wiring ---------------- */
-function stopPlayback() {
-  cosmos.playing = false;
-  playBtn.textContent = "▶";
-  playBtn.classList.remove("is-playing");
-}
-playBtn.addEventListener("click", () => {
-  cosmos.playing = !cosmos.playing;
-  playBtn.textContent = cosmos.playing ? "❚❚" : "▶";
-  playBtn.classList.toggle("is-playing", cosmos.playing);
+/* ---------------- pause when the window is not visible ---------------- */
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    windowFocused = false;
+    return;
+  }
+  windowFocused = document.hasFocus();
+  lastFrameTime = performance.now();
+  requestRender();
 });
-frameSlider.addEventListener("input", () => {
-  stopPlayback();
-  cosmos.current = Number(frameSlider.value) || 0;
-  updateFrameUI(cosmos.current);
+window.addEventListener("focus", () => {
+  windowFocused = true;
+  lastFrameTime = performance.now();
+  requestRender();
 });
-
+window.addEventListener("blur", () => {
+  windowFocused = false;
+});
 
 /* ---------------- controls wiring ---------------- */
 autoRotateCb.addEventListener("change", () => {
-  controls.autoRotate = autoRotateCb.checked;
+  setAutoRotate(autoRotateCb.checked);
+  save();
 });
 showGridCb.addEventListener("change", () => {
   grid.visible = showGridCb.checked;
+  requestRender();
 });
 showAxesCb.addEventListener("change", () => {
   axes.visible = showAxesCb.checked;
+  requestRender();
 });
 showSunCb?.addEventListener("change", setOrbitPropsVisible);
 orbitPlayBtn?.addEventListener("click", orbitPlayToggle);
@@ -1763,25 +1298,23 @@ showEnsembleCb?.addEventListener("change", () => {
   renderEnsembleEpoch(epoch, { force: true });
 });
 resetViewBtn.addEventListener("click", () => {
-  if (mode === "cosmos" && cosmos.loaded) {
-    fitCameraToCosmos();
-  } else {
-    fitCameraToTrajectory(trajRadius);
-  }
+  fitCameraToTrajectory(trajRadius);
 });
 topViewBtn?.addEventListener("click", () => {
-  if (mode !== "orbit" || !trajectoryData?.points?.length) return;
+  if (!trajectoryData?.points?.length) return;
   // A spinning top-down view is useless; the guide framing is static.
-  controls.autoRotate = false;
-  if (autoRotateCb) autoRotateCb.checked = false;
+  setAutoRotate(false);
+  save();
   fitCameraTopDown();
 });
 
 showPropCb?.addEventListener("change", () => {
   trajGroup.children.forEach((c) => { if (c.name === "overlay-prop") c.visible = !!showPropCb.checked; });
+  requestRender();
 });
 showCorrCb?.addEventListener("change", () => {
   trajGroup.children.forEach((c) => { if (c.name === "overlay-corr") c.visible = !!showCorrCb.checked; });
+  requestRender();
 });
 
 /* ---------------- settings modal ---------------- */
@@ -1806,8 +1339,8 @@ function populateSettingsFields() {
 
 function applyDisplaySettings() {
   document.body.classList.toggle("light", settings.theme === "light");
-  // re-evaluate trajectory / cosmos-frame visibility with the new flags
-  updateViewForMode();
+  setAutoRotate(settings.autoRotate);
+  applyViewSettings();
 }
 
 let savedFlashTimer = null;
@@ -1837,7 +1370,6 @@ window.addEventListener("keydown", (ev) => {
   if (ev.key === " ") { ev.preventDefault(); orbitPlayToggle(); }
   else if (ev.key === "ArrowRight") { stepOrbit(1); }
   else if (ev.key === "ArrowLeft") { stepOrbit(-1); }
-  else if (ev.key === "1") { mode = "orbit"; updateViewForMode(); }
   else if (ev.key === "f" || ev.key === "F") {
     fitCameraToTrajectory(trajRadius);
   }
@@ -1875,8 +1407,9 @@ reloadDataBtn.addEventListener("click", () => {
 function orbitPlayToggle() {
   orbitPlaying = !orbitPlaying;
   if (orbitPlayBtn) orbitPlayBtn.textContent = orbitPlaying ? "⏸" : "▶";
-  orbitLastTick = performance.now();
   orbitAcc = 0;
+  lastFrameTime = performance.now();
+  requestRender();
 }
 function setOrbitIndex(idx, { syncEnsemble = true } = {}) {
   const pts = trajectoryData?.points || [];
@@ -1899,6 +1432,7 @@ function setOrbitIndex(idx, { syncEnsemble = true } = {}) {
   applySunSample(idx);
   drawGuide(idx);
   if (syncEnsemble) syncEnsembleToOrbit(idx);
+  requestRender();
   return idx;
 }
 function stepOrbit(delta) {
@@ -1927,34 +1461,45 @@ function updateOrbitPlayback(dt) {
 }
 
 /* ---------------- animate ---------------- */
-function animate() {
+let lastFrameTime = performance.now();
+let lastIdleHud = 0;
+
+function animate(now) {
   requestAnimationFrame(animate);
-  earth.rotation.y += 0.0008;
-  atmosphere.rotation.y += 0.0004;
-  halo.rotation.y += 0.0002;
-  controls.update();
+  // rAF normally stops when the page is hidden; this also covers platforms
+  // (and minimized windows) where it keeps ticking.
+  if (document.hidden) return;
 
-  if (mode === "cosmos" && cosmos.playing && cosmos.loaded && cosmos.frames > 1) {
-    const now = performance.now();
-    const dt = Math.min((now - (cosmos.lastTick ?? now)) / 1000, 0.25);
-    cosmos.lastTick = now;
-    cosmos.playAcc += dt * cosmos.fps * settings.playbackSpeed;
-    while (cosmos.playAcc >= 1) {
-      cosmos.playAcc -= 1;
-      cosmos.current = (cosmos.current + 1) % cosmos.frames;
-    }
-    updateFrameUI(cosmos.current);
-  } else if (mode === "orbit" && orbitPlaying) {
-    const now = performance.now();
-    const dt = Math.min((now - (orbitLastTick ?? now)) / 1000, 0.25);
-    orbitLastTick = now;
-    updateOrbitPlayback(dt);
-  } else {
-    cosmos.lastTick = performance.now();
-    orbitLastTick = performance.now();
+  const t = typeof now === "number" ? now : performance.now();
+  const dt = Math.min((t - lastFrameTime) / 1000, 0.25);
+  lastFrameTime = t;
+
+  // OrbitControls.update() returns true while the camera is still moving
+  // (damping / auto-rotate) and false once the view has settled.  Skip it
+  // entirely when the window is unfocused so auto-rotate doesn't silently
+  // keep moving the camera in the background.
+  const cameraMoved = windowFocused ? controls.update() : false;
+  const playing = orbitPlaying && (trajectoryData?.points?.length ?? 0) > 1;
+  if (playing && windowFocused) updateOrbitPlayback(dt);
+
+  const animating = windowFocused && controls.autoRotate;
+  const shouldDraw = needsRender || animating || (cameraMoved && windowFocused);
+
+  if (shouldDraw) {
+    // Decorative spin only advances while frames are actually drawn, so an
+    // idle view is truly static and costs no GPU time.
+    earth.rotation.y += 0.0008;
+    atmosphere.rotation.y += 0.0004;
+    halo.rotation.y += 0.0002;
+
+    const drawStart = performance.now();
+    renderer.render(scene, camera);
+    needsRender = false;
+    if (perfVisible) updatePerfHud(t, performance.now() - drawStart);
+  } else if (perfVisible && perfHud && t - lastIdleHud > 1000) {
+    lastIdleHud = t;
+    perfHud.textContent = `idle (0 fps) · dpr ${renderer.getPixelRatio().toFixed(2)} · boot ${bootReadyMs == null ? "…" : Math.round(bootReadyMs) + "ms"}\n${gpuRenderer}`;
   }
-
-  renderer.render(scene, camera);
 }
 
 document.querySelectorAll("#pipeline-card [data-target]").forEach((btn) => {
@@ -1985,85 +1530,14 @@ document.querySelectorAll("#pipeline-card [data-target]").forEach((btn) => {
     }
   });
 });
-pickFolderBtn?.addEventListener("click", async () => {
-  const p = await openFolderDialog();
-  if (!p) {
-    // Browser fallback: the <input webkitdirectory> picker still works.
-    jobDirInput?.click();
-    return;
-  }
-  if (jobBaseInput) jobBaseInput.value = p;
-  settings.jobDir = p;
-  save();
-  try {
-    await loadJobFromPath(p);
-  } catch (e) {
-    setCosmosDot("err");
-    cosmosStatus.textContent = `Could not load job — ${e.message}`;
-    showError(`Cosmos job: ${e.message}`);
-  }
-});
-
-/* ---------------- boot ---------------- */
-loadDemoBtn?.addEventListener("click", () => loadDemoJob());
-
-exportSnapshotBtn?.addEventListener("click", () => {
-  try {
-    const url = renderer.domElement.toDataURL("image/png");
-    const a = document.createElement("a");
-    a.href = url; a.download = "residual-snapshot.png"; a.click();
-  } catch (e) { showError(`Export failed: ${e.message}`); }
-});
-exportReportBtn?.addEventListener("click", () => {
-  const report = {
-    generated: new Date().toISOString(),
-    provenance: provenanceEl?.textContent || "",
-    predictions_rows: predictionsData?.rows?.length ?? null,
-    cosmos: cosmos.job ? { job_id: cosmos.job.job_id || cosmos.job.id, frames: cosmos.frames, fps: cosmos.fps } : null,
-  };
-  const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = "residual-report.json"; a.click();
-  URL.revokeObjectURL(url);
-});
-loadJobBtn.addEventListener("click", () => jobDirInput.click());
-jobDirInput.addEventListener("change", () => {
-  const files = Array.from(jobDirInput.files || []);
-  if (files.length) loadJobFromFiles(files);
-  jobDirInput.value = "";
-});
-scanJobsBtn?.addEventListener("click", async () => {
-  const base = (jobBaseInput?.value || "").trim();
-  if (!base) return;
-  settings.jobDir = base.endsWith("/") ? base : base + "/";
-  save();
-  if (isLocalPath(base) && hasBackend) {
-    try {
-      await loadJobFromPath(base);
-    } catch (e) {
-      setCosmosDot("err");
-      cosmosStatus.textContent = `Could not load job — ${e.message}`;
-      showError(`Cosmos job: ${e.message}`);
-      return;
-    }
-  } else {
-    await loadDemoJob();
-  }
-  if (jobListEl && cosmos.job) {
-    jobListEl.innerHTML = "";
-    const li = document.createElement("li");
-    li.textContent = `${cosmos.job.job_id || cosmos.job.id || "job"} · ${cosmos.job.mode || "—"} · ${cosmos.frames} frames · ${cosmos.job.pointing_law || "—"}`;
-    jobListEl.appendChild(li);
-  }
-});
-
 setLoading(true);
 sceneStatus.textContent = "Loading data…";
+// Auto-rotate is opt-in now: an idle viewer must not render at 60 fps.
+autoRotateCb.checked = !!settings.autoRotate;
+controls.autoRotate = autoRotateCb.checked;
 populateSettingsFields();
 applyDisplaySettings();
 resize();
-updateViewForMode();
 animate();
 loadTrajectory();
 loadPinnResult();

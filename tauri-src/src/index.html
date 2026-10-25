@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Residual — Orbit, PINN &amp; Cosmos Viewer</title>
+    <title>Residual — Orbit &amp; PINN Viewer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -31,14 +31,11 @@
           </div>
         </div>
         <div class="topbar-center">
-          <nav class="mode-tabs" id="mode-tabs" aria-label="Viewer mode">
-            <button class="mode-tab is-active" data-mode="orbit" type="button">Orbit</button>
-          </nav>
           <span class="chip" id="scene-status">Initializing scene…</span>
         </div>
         <div class="topbar-actions">
           <label class="toggle">
-            <input type="checkbox" id="auto-rotate" checked />
+            <input type="checkbox" id="auto-rotate" />
             <span>Auto-rotate</span>
           </label>
           <label class="toggle">
@@ -68,7 +65,7 @@
       </header>
 
       <aside id="panel">
-        <section class="card" id="trajectory-card" data-mode-panel="orbit">
+        <section class="card" id="trajectory-card">
           <div class="card-head">
             <h2>Trajectory</h2>
             <span class="status-dot" id="traj-dot"></span>
@@ -94,7 +91,7 @@
           <p id="provenance" class="status-text provenance"></p>
         </section>
 
-        <section class="card" id="pinn-card" data-mode-panel="orbit">
+        <section class="card" id="pinn-card">
           <div class="card-head">
             <h2>PINN result</h2>
             <span class="status-dot" id="pinn-dot"></span>
@@ -117,7 +114,7 @@
           </details>
         </section>
 
-        <section class="card" id="guide-card" data-mode-panel="orbit">
+        <section class="card" id="guide-card">
           <div class="card-head">
             <h2>Guide map</h2>
             <span class="status-dot" id="guide-dot"></span>
@@ -126,7 +123,7 @@
           <canvas id="guide-canvas" width="320" height="240" aria-label="Guide map"></canvas>
         </section>
 
-        <section class="card" id="residual-card" data-mode-panel="orbit">
+        <section class="card" id="residual-card">
           <div class="card-head">
             <h2>Residual analysis</h2>
             <span class="status-dot" id="residual-dot"></span>
@@ -153,9 +150,6 @@
             <button class="btn ghost" data-target="residual" type="button">residual</button>
             <button class="btn ghost" data-target="train" type="button">train</button>
           </div>
-          <div class="btn-row">
-            <button id="pick-folder-btn" class="btn ghost" type="button">Open folder…</button>
-          </div>
           <pre id="pipeline-log" class="pipeline-log"></pre>
         </section>
 
@@ -168,27 +162,7 @@
         </div>
         <div id="error-banner" class="error-banner" hidden></div>
         <p id="scene-caption" class="scene-caption">Bodies and Sun enlarged · distances compressed · not to scale</p>
-
-        <div id="frame-render" class="frame-render is-hidden">
-          <img id="frame-img" alt="Rendered frame" draggable="false" />
-          <span class="frame-render-label" id="frame-render-label"></span>
-        </div>
-
-        <div id="scrubber" class="scrubber is-hidden" role="region" aria-label="Frame scrubber">
-          <button id="play-btn" class="play-btn" type="button" aria-label="Play frames">▶</button>
-          <div class="scrub-body">
-            <div class="scrub-labels">
-              <span id="frame-label" class="frame-label">frame — / —</span>
-              <span id="time-label" class="time-label">t = — s</span>
-            </div>
-            <div class="scrub-track">
-              <span class="scrub-progress" id="scrub-progress"></span>
-              <span class="scrub-thumb" id="scrub-thumb"></span>
-              <label class="visually-hidden" for="frame-slider">Frame number</label>
-              <input type="range" id="frame-slider" min="0" max="0" value="0" step="1" />
-            </div>
-          </div>
-        </div>
+        <div id="perf-hud" class="perf-hud" hidden></div>
       </main>
 
       <footer id="metrics-strip">
@@ -219,11 +193,7 @@
           <label for="set-pinnPath">PINN result JSON path</label>
           <input type="text" id="set-pinnPath" data-setting="pinnPath" spellcheck="false" class="settings-input" placeholder="./data/pinn_result.json" />
         </div>
-        <div class="settings-field">
-          <label for="set-jobDir">Cosmos job directory</label>
-          <input type="text" id="set-jobDir" data-setting="jobDir" spellcheck="false" class="settings-input" placeholder="./data/demo_job/" />
-          <p class="settings-hint">Paths can be relative to the app assets. Use “Reload data” after changing them.</p>
-        </div>
+        <p class="settings-hint">Paths can be relative to the app assets. Use “Reload data” after changing them.</p>
         <div class="btn-row">
           <button id="reload-data-btn" class="btn primary" type="button">Reload data</button>
         </div>
@@ -245,10 +215,6 @@
             <input type="checkbox" id="set-showTrajectory" data-setting="showTrajectory" />
             <span>Show trajectory</span>
           </label>
-          <label class="toggle settings-toggle">
-            <input type="checkbox" id="set-showCosmosFrames" data-setting="showCosmosFrames" />
-            <span>Show Cosmos frames</span>
-          </label>
         </div>
 
         <h3 class="subhead">Propagation params</h3>
@@ -266,7 +232,7 @@
             <input type="number" id="set-propBodies" data-setting="propBodies" min="1" step="1" class="settings-input" />
           </div>
         </div>
-        <p class="settings-hint">Stored as hints for re-running propagation / Cosmos jobs — they don't affect the viewer.</p>
+        <p class="settings-hint">Stored as hints for re-running propagation — they don't affect the viewer.</p>
 
         <div class="settings-footer">
           <span id="settings-saved" class="settings-saved">Changes apply instantly &amp; are saved</span>
