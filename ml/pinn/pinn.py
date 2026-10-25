@@ -112,7 +112,7 @@ def train_pinn(model, X_fit, Y_pos, Y_vel, epochs=500, lr=1e-3, l2=1e-4,
                 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
-                    best_state = model.state_dict().copy()
+                    best_state = copy.deepcopy(model.state_dict())
                     patience_counter = 0
                 else:
                     patience_counter += 1
