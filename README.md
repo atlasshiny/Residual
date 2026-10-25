@@ -19,6 +19,7 @@ The project implements the restricted Earth-Moon multibody problem with a symple
   - **Linear regression**: linear baseline.
 - **Cosmos Integration**: Python workers (`ml/cosmos/`) implement transfer, inverse-dynamics, and forward-dynamics jobs over a file contract. `scripts/pinn_to_cosmos.py` reconstructs a PINN-corrected trajectory, runs the Rust `posebuilder`, and optionally submits 9D actions to vLLM-Omni.
 - **Tauri + Three.js Viewer**: visualizes the trajectory and the PINN/SINDy metrics and expression, plus a Sun-direction marker that tracks the current epoch (its distance is compressed to fit the lunar scene; the UI label says "not to scale"). The orbit view renders guide-style visuals: a dimmed full reference path with a bright growing traveled trail, exaggerated Earth/Moon markers and labels, a deterministic starfield, and a static "Top view" framing the arc face-on down the orbit normal.
+- **Live Mission Runner**: the same viewer can propagate a new mission in-app from an Earth-centred state vector, duration, and impulsive burns. The Tauri backend calls the pure `mission` crate (Rust Dormand–Prince), returns a `points`/`times` bundle, and draws it with a cyan spacecraft marker instead of replaying the static JSON. See [`docs/mission-runner.md`](docs/mission-runner.md).
 
 ## 📊 Results & Analysis
 
@@ -46,7 +47,7 @@ Notes:
 | Path | Contents |
 | --- | --- |
 | `src/kernels/` | FP64 CUDA propagator (`multibody_solver`) |
-| `crates/` | Rust workspace: `dynamics`, `ingest`, `frames`, `residual`, `schema`, `ipc`, `posebuilder`, `evaluator` |
+| `crates/` | Rust workspace: `dynamics`, `ingest`, `frames`, `residual`, `schema`, `ipc`, `posebuilder`, `evaluator`, `mission` |
 | `ml/pinn/` | PINN, MLP, SINDy, linear regression, dataset/feature helpers, config |
 | `ml/cosmos/` | Cosmos transfer / inverse-dynamics / forward-dynamics workers and vLLM-Omni client |
 | `ml/validation/` | Reference comparison helpers (`horizons.py`) |
@@ -104,6 +105,19 @@ cargo build --workspace
    ```
 
 SPICE ingestion is Python-only (`scripts/fetch_spice.py` with `spiceypy`); it produces the same canonical `data/reference.csv` as Horizons, so the residual and ML stages are source-agnostic.
+
+### Live Mission Runner
+
+The desktop viewer's **Mission** card propagates a state vector locally instead of loading the bundled 30-day reference arc. Start the Tauri app (`cd tauri-src && npm run dev`), then:
+
+1. Pick a centre (Earth-centred inertial by default, or Earth–Moon barycentric).
+2. Enter duration, position (`km`), and velocity (`km/s`); optionally add up to 8 impulsive burns (`t` in seconds, `Δv` in `m/s`).
+3. Press **Run mission**. The backend runs the Rust Dormand–Prince core on a blocking thread and returns a uniformly sampled `points`/`times` bundle; the viewport swaps to a cyan **Craft** marker and the trajectory card shows the live frame and sample count.
+4. **Load bundle** restores the static reference arc. In a plain browser (no Tauri IPC) the mission card reports that the desktop backend is required and the bundled viewer keeps working.
+
+Presets fill a 400 km LEO orbit and an approximate translunar injection. The form is saved in `localStorage`.
+
+Current limitations: the propagator uses the analytic circular Earth–Moon ephemeris (no SPICE kernels in Rust), there is no finite-thrust, atmosphere, or launch model yet, and Earth-centred inputs are converted with the Earth's position at the start epoch but do not subtract its ~12 m/s barycentric velocity. Those approximation notes are documented in [`docs/mission-runner.md`](docs/mission-runner.md) and in the crate docs.
 
 ### Make Targets
 

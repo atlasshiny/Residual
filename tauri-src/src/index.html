@@ -65,6 +65,64 @@
       </header>
 
       <aside id="panel">
+        <section class="card" id="mission-card">
+          <div class="card-head">
+            <h2>Mission</h2>
+            <span class="status-dot" id="mission-dot"></span>
+          </div>
+          <p id="mission-status" class="status-text">Run the propagator locally — no rebuild needed.</p>
+
+          <div class="mission-row">
+            <div class="settings-field">
+              <label for="mission-center">Center</label>
+              <select id="mission-center" class="settings-input">
+                <option value="earth">Earth</option>
+                <option value="barycentric">Barycenter</option>
+              </select>
+            </div>
+            <div class="settings-field">
+              <label for="mission-duration">Duration</label>
+              <div class="mission-duration">
+                <input type="number" id="mission-duration" class="settings-input" step="any" min="0" value="2" />
+                <select id="mission-duration-unit" class="settings-input" aria-label="Duration unit">
+                  <option value="60">min</option>
+                  <option value="3600">h</option>
+                  <option value="86400" selected>d</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="mission-vector">
+            <span class="mission-vector-label">r (km)</span>
+            <input type="number" id="mission-rx" class="settings-input" step="any" aria-label="Position x (km)" />
+            <input type="number" id="mission-ry" class="settings-input" step="any" aria-label="Position y (km)" />
+            <input type="number" id="mission-rz" class="settings-input" step="any" aria-label="Position z (km)" />
+          </div>
+          <div class="mission-vector">
+            <span class="mission-vector-label">v (km/s)</span>
+            <input type="number" id="mission-vx" class="settings-input" step="any" aria-label="Velocity x (km/s)" />
+            <input type="number" id="mission-vy" class="settings-input" step="any" aria-label="Velocity y (km/s)" />
+            <input type="number" id="mission-vz" class="settings-input" step="any" aria-label="Velocity z (km/s)" />
+          </div>
+
+          <div class="mission-burns-head">
+            <span>Impulsive burns <span class="mission-hint">t (s) · Δv (m/s)</span></span>
+            <button id="mission-add-burn" class="btn ghost mission-mini" type="button">+ Burn</button>
+          </div>
+          <div id="mission-burns" class="mission-burns"></div>
+
+          <div class="btn-row mission-actions">
+            <button id="mission-run" class="btn primary" type="button">Run mission</button>
+            <button id="mission-restore" class="btn ghost" type="button">Load bundle</button>
+          </div>
+          <div class="btn-row mission-presets">
+            <button class="btn ghost mission-mini" data-preset="leo" type="button">LEO 400 km</button>
+            <button class="btn ghost mission-mini" data-preset="tli" type="button">TLI (approx)</button>
+          </div>
+          <p id="mission-summary" class="settings-hint">Runs the Rust Dormand–Prince core. Earth-centred by default.</p>
+        </section>
+
         <section class="card" id="trajectory-card">
           <div class="card-head">
             <h2>Trajectory</h2>

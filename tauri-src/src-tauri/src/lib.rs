@@ -26,7 +26,8 @@ pub fn run() {
             read_text_file,
             list_dir,
             pick_folder,
-            run_make
+            run_make,
+            propagate_mission
         ])
         .run(tauri::generate_context!())
         .expect("error while running residual ui");
@@ -95,6 +96,16 @@ async fn run_make(target: String) -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("make task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn propagate_mission(
+    request: mission::MissionRequest,
+) -> Result<mission::MissionTrajectory, String> {
+    tauri::async_runtime::spawn_blocking(move || mission::run(&request))
+        .await
+        .map_err(|e| format!("mission task failed: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

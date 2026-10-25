@@ -1,0 +1,14 @@
+[package]
+name = "mission"
+version = "0.1.0"
+edition = "2021"
+description = "Initial state + solver config -> sampled trajectory for the viewer"
+
+[lib]
+name = "mission"
+path = "src/lib.rs"
+
+[dependencies]
+dynamics = { path = "../dynamics" }
+schema = { path = "../schema" }
+serde = { version = "1", features = ["derive"] }
