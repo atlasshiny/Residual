@@ -33,6 +33,8 @@ pub struct SolverConfig {
     pub epoch: f64,
     pub mu_earth: f64,
     pub mu_moon: f64,
+    /// Solar gravitational parameter; zero disables the third-body term.
+    pub mu_sun: f64,
     pub earth_radius: f64,
     pub j2: f64,
     pub moon_distance: f64,
@@ -63,6 +65,7 @@ impl From<DynConfig> for SolverConfig {
             epoch: c.epoch,
             mu_earth: c.mu_earth,
             mu_moon: c.mu_moon,
+            mu_sun: c.mu_sun,
             earth_radius: c.earth_radius,
             j2: c.j2,
             moon_distance: c.moon_distance,
@@ -83,6 +86,7 @@ impl From<SolverConfig> for DynConfig {
             epoch: c.epoch,
             mu_earth: c.mu_earth,
             mu_moon: c.mu_moon,
+            mu_sun: c.mu_sun,
             earth_radius: c.earth_radius,
             j2: c.j2,
             moon_distance: c.moon_distance,
@@ -226,14 +230,11 @@ impl Mission {
         if !self.epoch_s.is_finite() {
             return Err(SchemaError::Invalid("epoch_s is not finite".into()));
         }
-        if !self.solver.dt.is_finite() || self.solver.dt <= 0.0 {
-            return Err(SchemaError::Invalid("solver.dt must be positive".into()));
-        }
-        if self.solver.mu_earth < 0.0 || self.solver.mu_moon < 0.0 {
-            return Err(SchemaError::Invalid(
-                "gravitational parameters must be non-negative".into(),
-            ));
-        }
+        // The dynamics crate owns the propagator's accepted-input contract
+        // (including the CUDA burn cap), so delegate rather than duplicate it.
+        DynConfig::from(self.solver.clone())
+            .validate()
+            .map_err(|e| SchemaError::Invalid(format!("solver: {e}")))?;
         for burn in &self.burns {
             if !burn.is_valid() {
                 return Err(SchemaError::Invalid(format!(

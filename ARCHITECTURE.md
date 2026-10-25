@@ -34,7 +34,7 @@ If a judge swaps Cosmos 3 for an older video model, **inverse dynamics (job B be
 ## 3. System diagram
 
 ```
- Artemis/Orion ephemeris + telemetry (SPICE kernels via ANISE, other formats [verify])
+ Artemis/Orion ephemeris + telemetry (SPICE kernels via Python `spiceypy`, other formats [verify])
                          │
                          ▼
  ┌──────────────────────────────────────────────────────────────────────┐
@@ -75,7 +75,7 @@ The performance-critical propagator stays in CUDA/C++. Rust crates may still be 
 | Component | Responsibility | Notes |
 |---|---|---|
 | `src/kernels/multibody_solver` | FP64 Earth/Moon n-body propagation | CUDA shared/static libraries; currently fixed-step velocity Verlet with optional J2 |
-| `ingest` (future) | Load SPICE kernels, mission files, telemetry | Python/Rust helper around data files; SPICE coverage `[verify]` |
+| `ingest` (future) | Load mission files and telemetry; SPICE ingestion is Python-only (`scripts/fetch_spice.py`) | Python/Rust helper around data files; SPICE coverage `[verify]` |
 | `frames` | Time systems and reference frames | Largest source of silent bugs; unit-test every transform |
 | `residual` | Reference − propagated, burn masking, residual metric | Burn windows and attitude events must be masked or modeled |
 | `posebuilder` | State + pointing law → camera pose → ΔT sequence (§6) | Owns scale mapping `k` |
@@ -83,7 +83,7 @@ The performance-critical propagator stays in CUDA/C++. Rust crates may still be 
 | `schema` | Vehicle and mission schemas (serde/JSON/YAML) | Stretch: "universal" spacecraft |
 | `ipc` | Job queue and artifact manifest | Talks to Cosmos workers over files + a small RPC |
 
-Validation targets for `dynamics`: energy and angular-momentum conservation on a two-body case, then agreement with Horizons over a chosen arc. Separate integrator error from missing physics before handing residuals to the PINN.
+Validation targets for `dynamics`: energy and angular-momentum conservation on a two-body case, then agreement with Horizons over a chosen arc. The default `AnalyticEphemeris` is the circular Earth-Moon model shared with the CUDA kernel; feeding a `TabulatedEphemeris` built from the Python-ingested Horizons/SPICE arc is what separates integrator error from missing physics before handing residuals to the PINN.
 
 ### 4.2 PINN branch (`ml/pinn/`)
 

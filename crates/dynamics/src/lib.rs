@@ -1,12 +1,34 @@
-//! Minimal Rust core for the Earth-Moon restricted dynamics.
+//! Rust core for the Earth-Moon restricted dynamics.
 //!
 //! Provides a fixed-step velocity-Verlet propagator ([`propagate`]) and an
 //! adaptive Dormand-Prince (RK45) propagator ([`propagate_adaptive`]) built on
-//! the [`dormand_prince_step`] embedded 4(5) error estimate.
+//! the [`dormand_prince_step`] embedded 4(5) error estimate.  Both integrators
+//! share one acceleration function and one burn model, so they cannot drift
+//! apart.
 //!
-//! TODO: full SPICE ephemeris is not implemented yet.
+//! # Ephemeris
+//!
+//! The default [`AnalyticEphemeris`] is a circular, coplanar Earth-Moon
+//! barycentric model that matches the CUDA kernel exactly.  That model is a
+//! deliberate approximation: a real lunar trajectory does not follow a circle,
+//! so it cannot reproduce a JPL Horizons or SPICE arc to better than the
+//! circular-model error.
+//!
+//! Real positions are supplied through the [`Ephemeris`] trait.
+//! [`TabulatedEphemeris`] linearly interpolates a time series — for example the
+//! Moon/Sun positions written by the Python SPICE or Horizons ingestion step —
+//! so the Rust propagator can consume a real ephemeris without linking a SPICE
+//! toolkit.  SPICE stays Python-side (`scripts/fetch_spice.py`); Rust never
+//! reads a kernel directly.
+//!
+//! # Validation
+//!
+//! [`Config::validate`] mirrors the CUDA kernel's `valid_config`, including the
+//! [`MAX_BURNS`] cap.  Propagators run a debug assertion on it, so an invalid
+//! configuration fails loudly in tests instead of silently producing NaNs.
 
 use std::f64::consts::PI;
+use std::fmt;
 
 /// Allow `propagate` to accept any common integer step count.
 pub trait IntoSteps {
@@ -29,17 +51,17 @@ impl IntoSteps for u64 {
 }
 impl IntoSteps for i32 {
     fn into_steps(self) -> usize {
-        self as usize
+        self.max(0) as usize
     }
 }
 impl IntoSteps for i64 {
     fn into_steps(self) -> usize {
-        self as usize
+        self.max(0) as usize
     }
 }
 impl IntoSteps for isize {
     fn into_steps(self) -> usize {
-        self as usize
+        self.max(0) as usize
     }
 }
 
@@ -102,6 +124,20 @@ impl Vec3 {
     pub fn magnitude(self) -> f64 {
         self.norm()
     }
+
+    /// Linear interpolation: `self` at `w = 0`, `other` at `w = 1`.
+    pub fn lerp(self, other: Self, w: f64) -> Self {
+        Self {
+            x: self.x + (other.x - self.x) * w,
+            y: self.y + (other.y - self.y) * w,
+            z: self.z + (other.z - self.z) * w,
+        }
+    }
+
+    /// Whether all three components are finite.
+    pub fn is_finite(self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
+    }
 }
 
 impl std::ops::Add for Vec3 {
@@ -150,6 +186,10 @@ pub struct Config {
     pub epoch: f64,
     pub mu_earth: f64,
     pub mu_moon: f64,
+    /// Solar gravitational parameter. Zero by default, which keeps the model
+    /// identical to the CUDA kernel. Set it (and supply a Sun position through
+    /// an [`Ephemeris`]) to enable the third-body term.
+    pub mu_sun: f64,
     pub earth_radius: f64,
     pub j2: f64,
     pub moon_distance: f64,
@@ -158,6 +198,8 @@ pub struct Config {
     pub softening: f64,
     pub perturbation: i32,
     pub spin_axis: Vec3,
+    /// Impulsive burns. At most [`MAX_BURNS`] entries are accepted so a
+    /// configuration valid here is also valid on the GPU.
     pub burns: Vec<Burn>,
 }
 
@@ -168,6 +210,7 @@ impl Default for Config {
             epoch: 0.0,
             mu_earth: K_MU_EARTH,
             mu_moon: K_MU_MOON,
+            mu_sun: 0.0,
             earth_radius: K_EARTH_RADIUS,
             j2: K_EARTH_J2,
             moon_distance: K_EARTH_MOON_DISTANCE,
@@ -181,10 +224,139 @@ impl Default for Config {
     }
 }
 
+/// Maximum number of impulsive burns per propagation.
+///
+/// The CUDA kernel stores burns in a fixed `burns[8]` array and rejects
+/// configurations with more, so the Rust core enforces the same cap.
+pub const MAX_BURNS: usize = 8;
+
+/// A configuration that would produce NaNs, divide by zero, or diverge from
+/// the CUDA kernel's accepted inputs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ConfigError {
+    /// A scalar field was NaN or infinite.
+    NotFinite(&'static str),
+    /// A field was finite but outside its accepted range.
+    OutOfRange { field: &'static str, value: f64 },
+    /// More burns than [`MAX_BURNS`].
+    TooManyBurns { count: usize, max: usize },
+    /// `perturbation` is not a supported mode.
+    UnsupportedPerturbation(i32),
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFinite(field) => write!(f, "{field} must be finite"),
+            Self::OutOfRange { field, value } => {
+                write!(f, "{field} is out of range: {value}")
+            }
+            Self::TooManyBurns { count, max } => {
+                write!(f, "{count} burns supplied, at most {max} are supported")
+            }
+            Self::UnsupportedPerturbation(mode) => {
+                write!(f, "unsupported perturbation mode {mode} (expected 0 or 1)")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl Config {
+    /// Check every field against the constraints enforced by the CUDA kernel.
+    ///
+    /// This is intentionally identical in spirit to `valid_config` in
+    /// `src/kernels/multibody_solver.cu`, plus the Sun parameter which CUDA
+    /// does not model yet.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !self.dt.is_finite() || self.dt <= 0.0 {
+            return Err(ConfigError::OutOfRange {
+                field: "dt",
+                value: self.dt,
+            });
+        }
+        if !self.epoch.is_finite() {
+            return Err(ConfigError::NotFinite("epoch"));
+        }
+        for (name, value) in [
+            ("mu_earth", self.mu_earth),
+            ("mu_moon", self.mu_moon),
+            ("mu_sun", self.mu_sun),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(ConfigError::OutOfRange { field: name, value });
+            }
+        }
+        if !self.earth_radius.is_finite() || self.earth_radius < 0.0 {
+            return Err(ConfigError::OutOfRange {
+                field: "earth_radius",
+                value: self.earth_radius,
+            });
+        }
+        if !self.j2.is_finite() {
+            return Err(ConfigError::NotFinite("j2"));
+        }
+        if !self.moon_distance.is_finite()
+            || self.moon_distance < 0.0
+            || (self.moon_distance > 0.0 && self.moon_distance < self.earth_radius)
+        {
+            return Err(ConfigError::OutOfRange {
+                field: "moon_distance",
+                value: self.moon_distance,
+            });
+        }
+        if !self.moon_period.is_finite() || self.moon_period < 0.0 {
+            return Err(ConfigError::OutOfRange {
+                field: "moon_period",
+                value: self.moon_period,
+            });
+        }
+        if !self.moon_phase.is_finite() {
+            return Err(ConfigError::NotFinite("moon_phase"));
+        }
+        if !self.softening.is_finite() || self.softening < 0.0 {
+            return Err(ConfigError::OutOfRange {
+                field: "softening",
+                value: self.softening,
+            });
+        }
+        if self.perturbation != 0 && self.perturbation != 1 {
+            return Err(ConfigError::UnsupportedPerturbation(self.perturbation));
+        }
+        for (name, value) in [
+            ("spin_axis.x", self.spin_axis.x),
+            ("spin_axis.y", self.spin_axis.y),
+            ("spin_axis.z", self.spin_axis.z),
+        ] {
+            if !value.is_finite() {
+                return Err(ConfigError::NotFinite(name));
+            }
+        }
+        if self.burns.len() > MAX_BURNS {
+            return Err(ConfigError::TooManyBurns {
+                count: self.burns.len(),
+                max: MAX_BURNS,
+            });
+        }
+        for burn in &self.burns {
+            if !burn.t.is_finite() {
+                return Err(ConfigError::NotFinite("burn.t"));
+            }
+            if !burn.dv.x.is_finite() || !burn.dv.y.is_finite() || !burn.dv.z.is_finite() {
+                return Err(ConfigError::NotFinite("burn.dv"));
+            }
+        }
+        Ok(())
+    }
+}
+
 // Physical constants (SI), matching CUDA solver.
 pub const K_PI: f64 = PI;
 pub const K_MU_EARTH: f64 = 3.986004418e14;
 pub const K_MU_MOON: f64 = 4.9048695e12;
+/// Solar gravitational parameter, SI. Not used unless `Config::mu_sun` is set.
+pub const K_MU_SUN: f64 = 1.32712440018e20;
 pub const K_EARTH_RADIUS: f64 = 6.378137e6;
 pub const K_EARTH_J2: f64 = 1.08262668e-3;
 pub const K_EARTH_MOON_DISTANCE: f64 = 3.844e8;
@@ -230,6 +402,259 @@ pub fn earth_moon_positions(t: f64, config: &Config) -> (Vec3, Vec3) {
     (earth, moon)
 }
 
+// ---------------------------------------------------------------------------
+// Ephemeris abstraction.
+// ---------------------------------------------------------------------------
+
+/// Positions of the perturbing bodies at one instant, in the same inertial
+/// frame (and the same time base) as the propagated state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyPositions {
+    /// Barycentric Earth position.
+    pub earth: Vec3,
+    /// Moon position, when a Moon term should be included.
+    pub moon: Option<Vec3>,
+    /// Sun position, when a third-body term should be included.
+    pub sun: Option<Vec3>,
+}
+
+/// Source of perturbing-body positions for the propagator.
+///
+/// The default [`AnalyticEphemeris`] reproduces the CUDA kernel's circular
+/// model.  Supply a [`TabulatedEphemeris`] to propagate against real positions
+/// (for example a Horizons/SPICE sampled arc) without linking SPICE in Rust.
+///
+/// Implementations must be deterministic and must not depend on `t` in a way
+/// that is discontinuous across an integration step; the adaptive controller
+/// assumes a smooth field.
+pub trait Ephemeris {
+    /// Body positions at absolute time `t` (the same base as `Config::epoch`).
+    fn positions(&self, t: f64, config: &Config) -> BodyPositions;
+
+    /// Time span `[start, end]` covered by this ephemeris, if bounded.
+    ///
+    /// Unbounded sources (such as the analytic model) return `None`.  Bounded
+    /// sources are clamped outside their span; use
+    /// [`TabulatedEphemeris::covers`] before propagating to reject an arc that
+    /// falls outside the data.
+    fn span(&self) -> Option<(f64, f64)> {
+        None
+    }
+}
+
+/// The circular, coplanar Earth-Moon model baked into the CUDA kernel.
+///
+/// The Sun is not modelled here; provide a [`TabulatedEphemeris`] with Sun
+/// samples and set `Config::mu_sun` to enable the third-body term.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnalyticEphemeris;
+
+impl Ephemeris for AnalyticEphemeris {
+    fn positions(&self, t: f64, config: &Config) -> BodyPositions {
+        let (earth, moon) = earth_moon_positions(t, config);
+        BodyPositions {
+            earth,
+            // `moon_distance == 0` is the documented way to disable the Moon,
+            // matching the CUDA `acceleration` guard.
+            moon: if config.moon_distance > 0.0 {
+                Some(moon)
+            } else {
+                None
+            },
+            sun: None,
+        }
+    }
+}
+
+/// One row of a tabulated ephemeris, in the propagator's inertial frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EphemerisSample {
+    /// Absolute time, same base as `Config::epoch`.
+    pub t: f64,
+    /// Barycentric Earth position, metres.
+    pub earth: Vec3,
+    /// Barycentric Moon position, metres.
+    pub moon: Vec3,
+    /// Barycentric Sun position, metres. Must be `Some` for every sample or
+    /// for none of them.
+    pub sun: Option<Vec3>,
+}
+
+impl EphemerisSample {
+    fn positions(self) -> BodyPositions {
+        BodyPositions {
+            earth: self.earth,
+            moon: Some(self.moon),
+            sun: self.sun,
+        }
+    }
+}
+
+/// Errors from constructing or using a [`TabulatedEphemeris`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EphemerisError {
+    /// No samples were supplied.
+    Empty,
+    /// A time or position was NaN or infinite.
+    NonFinite { index: usize },
+    /// Sample times are not strictly increasing.
+    NotSorted { index: usize },
+    /// Some samples carry a Sun position and others do not.
+    InconsistentSun { index: usize },
+    /// The requested time lies outside the tabulated span.
+    OutOfRange { t: f64, start: f64, end: f64 },
+}
+
+impl fmt::Display for EphemerisError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "ephemeris table is empty"),
+            Self::NonFinite { index } => write!(f, "ephemeris sample {index} is not finite"),
+            Self::NotSorted { index } => {
+                write!(f, "ephemeris sample {index} does not increase in time")
+            }
+            Self::InconsistentSun { index } => {
+                write!(
+                    f,
+                    "ephemeris sample {index} disagrees about Sun availability"
+                )
+            }
+            Self::OutOfRange { t, start, end } => {
+                write!(f, "time {t} outside ephemeris span [{start}, {end}]")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EphemerisError {}
+
+/// Linearly interpolated ephemeris built from a time series.
+///
+/// Construct it with [`TabulatedEphemeris::new`], which validates ordering and
+/// finiteness.  Lookups outside the tabulated span clamp to the nearest sample;
+/// call [`TabulatedEphemeris::covers`] first to reject such an arc.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabulatedEphemeris {
+    samples: Vec<EphemerisSample>,
+    has_sun: bool,
+}
+
+impl TabulatedEphemeris {
+    /// Build a table from samples sorted by strictly increasing time.
+    pub fn new(samples: Vec<EphemerisSample>) -> Result<Self, EphemerisError> {
+        if samples.is_empty() {
+            return Err(EphemerisError::Empty);
+        }
+        let has_sun = samples[0].sun.is_some();
+        for (index, sample) in samples.iter().enumerate() {
+            if !sample.t.is_finite()
+                || !sample.earth.is_finite()
+                || !sample.moon.is_finite()
+                || sample.sun.is_some_and(|s| !s.is_finite())
+            {
+                return Err(EphemerisError::NonFinite { index });
+            }
+            if index > 0 && sample.t <= samples[index - 1].t {
+                return Err(EphemerisError::NotSorted { index });
+            }
+            if sample.sun.is_some() != has_sun {
+                return Err(EphemerisError::InconsistentSun { index });
+            }
+        }
+        Ok(Self { samples, has_sun })
+    }
+
+    /// Number of tabulated samples.
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    /// Whether the table has no samples (never true after `new`).
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    /// Whether the table carries Sun positions.
+    pub fn has_sun(&self) -> bool {
+        self.has_sun
+    }
+
+    /// The tabulated samples.
+    pub fn samples(&self) -> &[EphemerisSample] {
+        &self.samples
+    }
+
+    /// First and last tabulated time.
+    pub fn time_span(&self) -> (f64, f64) {
+        (self.samples[0].t, self.samples[self.samples.len() - 1].t)
+    }
+
+    /// Validate that every time in `[start, end]` is covered by the table.
+    pub fn check_span(&self, start: f64, end: f64) -> Result<(), EphemerisError> {
+        let (lo, hi) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let (first, last) = self.time_span();
+        if lo < first {
+            return Err(EphemerisError::OutOfRange {
+                t: lo,
+                start: first,
+                end: last,
+            });
+        }
+        if hi > last {
+            return Err(EphemerisError::OutOfRange {
+                t: hi,
+                start: first,
+                end: last,
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether every time in `[start, end]` is covered by the table.
+    pub fn covers(&self, start: f64, end: f64) -> bool {
+        self.check_span(start, end).is_ok()
+    }
+
+    /// Position lookup with linear interpolation between samples.
+    fn lookup(&self, t: f64) -> BodyPositions {
+        let last = self.samples.len() - 1;
+        if t <= self.samples[0].t {
+            return self.samples[0].positions();
+        }
+        if t >= self.samples[last].t {
+            return self.samples[last].positions();
+        }
+        // `idx` is the first sample strictly after `t`, so `idx >= 1`.
+        let idx = self.samples.partition_point(|s| s.t <= t);
+        let a = self.samples[idx - 1];
+        let b = self.samples[idx];
+        let span = b.t - a.t;
+        let w = if span > 0.0 { (t - a.t) / span } else { 0.0 };
+        BodyPositions {
+            earth: a.earth.lerp(b.earth, w),
+            moon: Some(a.moon.lerp(b.moon, w)),
+            sun: a.sun.zip(b.sun).map(|(sa, sb)| sa.lerp(sb, w)),
+        }
+    }
+}
+
+impl Ephemeris for TabulatedEphemeris {
+    fn positions(&self, t: f64, _config: &Config) -> BodyPositions {
+        self.lookup(t)
+    }
+
+    fn span(&self) -> Option<(f64, f64)> {
+        Some(TabulatedEphemeris::time_span(self))
+    }
+}
+
+/// Default analytic ephemeris instance used by the infallible propagators.
+static ANALYTIC: AnalyticEphemeris = AnalyticEphemeris;
+
 /// J2 acceleration relative to Earth's centre.
 pub fn earth_j2_acceleration(d: Vec3, config: &Config) -> Vec3 {
     let r2 = d.dot(d);
@@ -253,22 +678,43 @@ pub fn earth_j2_acceleration(d: Vec3, config: &Config) -> Vec3 {
     )
 }
 
-/// Acceleration with Earth/Moon point masses and optional J2.
+/// Acceleration with Earth/Moon point masses and optional J2, using the
+/// analytic ephemeris.
 pub fn acceleration(r: Vec3, config: &Config, t: f64) -> Vec3 {
-    let (earth, moon) = earth_moon_positions(t, config);
-    let d_earth = r.sub(earth);
-    let d_moon = r.sub(moon);
+    acceleration_with(r, config, t, &ANALYTIC)
+}
 
+/// Acceleration with Earth/Moon/Sun point masses and optional J2, using a
+/// caller-supplied ephemeris.
+///
+/// A body contributes only when the ephemeris supplies its position *and* the
+/// matching gravitational parameter is positive.  With the default
+/// [`AnalyticEphemeris`] and `mu_sun = 0`, this is identical to the CUDA
+/// kernel.
+pub fn acceleration_with(r: Vec3, config: &Config, t: f64, ephemeris: &dyn Ephemeris) -> Vec3 {
+    let bodies = ephemeris.positions(t, config);
     let eps2 = config.softening * config.softening;
+
+    let d_earth = r.sub(bodies.earth);
     let r_earth2 = d_earth.dot(d_earth) + eps2;
-    let r_moon2 = d_moon.dot(d_moon) + eps2;
 
     let mut a = Vec3::ZERO;
-    if config.mu_earth > 0.0 {
+    if config.mu_earth > 0.0 && r_earth2 > 0.0 {
         a = a.add(d_earth.scale(-config.mu_earth / (r_earth2 * r_earth2.sqrt())));
     }
-    if config.mu_moon > 0.0 && config.moon_distance > 0.0 {
-        a = a.add(d_moon.scale(-config.mu_moon / (r_moon2 * r_moon2.sqrt())));
+    if let Some(moon) = bodies.moon {
+        let d_moon = r.sub(moon);
+        let r_moon2 = d_moon.dot(d_moon) + eps2;
+        if config.mu_moon > 0.0 && r_moon2 > 0.0 {
+            a = a.add(d_moon.scale(-config.mu_moon / (r_moon2 * r_moon2.sqrt())));
+        }
+    }
+    if let Some(sun) = bodies.sun {
+        let d_sun = r.sub(sun);
+        let r_sun2 = d_sun.dot(d_sun) + eps2;
+        if config.mu_sun > 0.0 && r_sun2 > 0.0 {
+            a = a.add(d_sun.scale(-config.mu_sun / (r_sun2 * r_sun2.sqrt())));
+        }
     }
     if config.perturbation == 1 {
         a = a.add(earth_j2_acceleration(d_earth, config));
@@ -276,25 +722,94 @@ pub fn acceleration(r: Vec3, config: &Config, t: f64) -> Vec3 {
     a
 }
 
-/// Fixed-step velocity-Verlet (kick-drift-kick) propagation, matching the CUDA solver. Returns trajectory including initial state.
+/// Shared physics for both integrators: one acceleration field and one burn
+/// model.  Keeping them here is what guarantees `propagate` and
+/// `propagate_adaptive` cannot diverge.
+struct System<'a> {
+    config: &'a Config,
+    ephemeris: &'a dyn Ephemeris,
+}
+
+impl<'a> System<'a> {
+    fn new(config: &'a Config, ephemeris: &'a dyn Ephemeris) -> Self {
+        Self { config, ephemeris }
+    }
+
+    fn acceleration(&self, r: Vec3, t: f64) -> Vec3 {
+        acceleration_with(r, self.config, t, self.ephemeris)
+    }
+
+    /// Burn Δv for the fixed-step window that matches the CUDA kernel.
+    fn burn_dv_window(&self, t: f64, dt: f64) -> Vec3 {
+        self.config
+            .burns
+            .iter()
+            .filter(|burn| (t - burn.t).abs() < 0.5 * dt)
+            .fold(Vec3::ZERO, |acc, burn| acc.add(burn.dv))
+    }
+
+    /// Burn Δv for burns at an exact epoch, within `tol`.
+    fn burn_dv_at(&self, t: f64, tol: f64) -> Vec3 {
+        self.config
+            .burns
+            .iter()
+            .filter(|burn| (burn.t - t).abs() <= tol)
+            .fold(Vec3::ZERO, |acc, burn| acc.add(burn.dv))
+    }
+}
+
+/// Fixed-step velocity-Verlet (kick-drift-kick) propagation, matching the CUDA
+/// solver. Returns the trajectory including the initial state.
+///
+/// Uses the analytic ephemeris.  See [`propagate_with`] for a real ephemeris.
+///
+/// # Panics
+///
+/// Debug builds assert that `config` passes [`Config::validate`] and that `dt`
+/// is finite and positive.
 pub fn propagate(state: State, steps: impl IntoSteps, dt: f64, config: &Config) -> Vec<State> {
+    propagate_with(state, steps, dt, config, &ANALYTIC)
+}
+
+/// Fixed-step velocity-Verlet propagation using a caller-supplied ephemeris.
+///
+/// A bounded ephemeris such as [`TabulatedEphemeris`] clamps outside its span;
+/// call [`TabulatedEphemeris::covers`] first if the arc must be fully covered.
+///
+/// # Panics
+///
+/// Debug builds assert that `config` passes [`Config::validate`] and that `dt`
+/// is finite and positive.
+pub fn propagate_with(
+    state: State,
+    steps: impl IntoSteps,
+    dt: f64,
+    config: &Config,
+    ephemeris: &dyn Ephemeris,
+) -> Vec<State> {
     let steps = steps.into_steps();
+    debug_assert!(
+        config.validate().is_ok(),
+        "invalid dynamics config: {:?}",
+        config.validate()
+    );
+    debug_assert!(dt.is_finite() && dt > 0.0, "dt must be finite and positive");
+    if steps == 0 || !dt.is_finite() || dt <= 0.0 {
+        return vec![state];
+    }
+
+    let system = System::new(config, ephemeris);
     let mut out = Vec::with_capacity(steps + 1);
-    // Velocity-Verlet (kick-drift-kick), matching the CUDA solver.
     let mut s = state;
     let mut t = config.epoch;
     out.push(s);
     for _ in 0..steps {
         // Apply impulsive burns firing at this step's start time.
-        for burn in &config.burns {
-            if (t - burn.t).abs() < 0.5 * dt {
-                s.v = s.v.add(burn.dv);
-            }
-        }
-        let a0 = acceleration(s.r, config, t);
+        s.v = s.v.add(system.burn_dv_window(t, dt));
+        let a0 = system.acceleration(s.r, t);
         s.v = s.v.add(a0.scale(0.5 * dt));
         s.r = s.r.add(s.v.scale(dt));
-        let a1 = acceleration(s.r, config, t + dt);
+        let a1 = system.acceleration(s.r, t + dt);
         s.v = s.v.add(a1.scale(0.5 * dt));
         t += dt;
         out.push(s);
@@ -593,9 +1108,9 @@ impl AdaptiveTrajectory {
 /// Propagate `state` from `config.epoch` to `t_end` using adaptive
 /// Dormand-Prince steps with the supplied controller.
 ///
-/// Impulsive burns from the configuration are honoured: the step size is
-/// clamped so a step never crosses a burn epoch, and the burn Δv is applied
-/// exactly at that epoch.
+/// Impulsive burns from the configuration are honoured in both integration
+/// directions: the step size is clamped so a step never crosses a burn epoch,
+/// and the burn Δv is applied exactly at that epoch.
 pub fn propagate_adaptive_with_controller(
     state: State,
     t_end: f64,
@@ -603,11 +1118,40 @@ pub fn propagate_adaptive_with_controller(
     controller: &AdaptiveController,
     config: &Config,
 ) -> AdaptiveTrajectory {
-    let accel = |r: Vec3, t: f64| acceleration(r, config, t);
+    propagate_adaptive_with_ephemeris(state, t_end, dt0, controller, config, &ANALYTIC)
+}
+
+/// Adaptive propagation using a caller-supplied ephemeris.
+///
+/// Negative `h` is used internally for backward arcs; the Dormand-Prince
+/// tableau is direction-agnostic, so the same error controller applies.
+///
+/// # Panics
+///
+/// Debug builds assert that `config` passes [`Config::validate`].
+pub fn propagate_adaptive_with_ephemeris(
+    state: State,
+    t_end: f64,
+    dt0: f64,
+    controller: &AdaptiveController,
+    config: &Config,
+    ephemeris: &dyn Ephemeris,
+) -> AdaptiveTrajectory {
+    debug_assert!(
+        config.validate().is_ok(),
+        "invalid dynamics config: {:?}",
+        config.validate()
+    );
+    let system = System::new(config, ephemeris);
+    let accel = |r: Vec3, t: f64| system.acceleration(r, t);
 
     let mut s = state;
     let mut t = config.epoch;
-    let mut dt = dt0.clamp(controller.dt_min, controller.dt_max);
+    let mut dt = if dt0.is_finite() && dt0 > 0.0 {
+        dt0.clamp(controller.dt_min, controller.dt_max)
+    } else {
+        controller.dt_min
+    };
 
     let mut traj = AdaptiveTrajectory {
         t: vec![t],
@@ -617,37 +1161,39 @@ pub fn propagate_adaptive_with_controller(
     };
 
     let forward = t_end >= t;
-    if !forward && t_end == t {
+    if t_end == t {
         return traj;
     }
 
-    // Sort burn epochs that lie strictly inside the span of integration.
+    let tol_eps = 1e-12 * t_end.abs().max(1.0);
+    let start_tol = 1e-9 * dt.max(1.0);
+
+    // Burns strictly inside the span, ordered in the direction of travel.
     let mut burn_times: Vec<f64> = config
         .burns
         .iter()
         .map(|b| b.t)
         .filter(|bt| {
             if forward {
-                *bt > t && *bt < t_end
+                *bt > t + start_tol && *bt < t_end - tol_eps
             } else {
-                *bt < t && *bt > t_end
+                *bt < t - start_tol && *bt > t_end + tol_eps
             }
         })
         .collect();
-    burn_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if forward {
+        burn_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        burn_times.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    }
     let mut next_burn = 0usize;
 
     // Apply any burns scheduled exactly at the start epoch.
-    for b in &config.burns {
-        if (b.t - t).abs() <= 1e-9 * dt.abs().max(1.0) {
-            s.v = s.v.add(b.dv);
-        }
-    }
+    s.v = s.v.add(system.burn_dv_at(t, start_tol));
     if let Some(first) = traj.states.first_mut() {
         *first = s;
     }
 
-    let tol_eps = 1e-12 * t_end.abs().max(1.0);
     let mut guard = 0usize;
     while (forward && t < t_end && (t_end - t).abs() > tol_eps)
         || (!forward && t > t_end && (t - t_end).abs() > tol_eps)
@@ -661,11 +1207,11 @@ pub fn propagate_adaptive_with_controller(
         let mut h = dt.min(remaining);
 
         // Never overshoot the next scheduled burn.
-        if forward {
-            if let Some(&nb) = burn_times.get(next_burn) {
-                if nb > t && nb - t < h {
-                    h = nb - t;
-                }
+        if let Some(&nb) = burn_times.get(next_burn) {
+            let delta = nb - t;
+            let distance = if forward { delta } else { -delta };
+            if distance > 0.0 && distance < h {
+                h = distance;
             }
         }
 
@@ -673,16 +1219,10 @@ pub fn propagate_adaptive_with_controller(
             break;
         }
 
-        let (candidate, err) = dormand_prince_step(s, &accel, t, h);
+        let h_signed = if forward { h } else { -h };
+        let (candidate, err) = dormand_prince_step(s, &accel, t, h_signed);
 
-        let finite = candidate.r.x.is_finite()
-            && candidate.r.y.is_finite()
-            && candidate.r.z.is_finite()
-            && candidate.v.x.is_finite()
-            && candidate.v.y.is_finite()
-            && candidate.v.z.is_finite();
-
-        if !finite {
+        if !candidate.r.is_finite() || !candidate.v.is_finite() {
             // Numerical breakdown: shrink and retry, or give up.
             if h <= controller.dt_min {
                 break;
@@ -695,7 +1235,7 @@ pub fn propagate_adaptive_with_controller(
         let hit_min = h <= controller.dt_min;
         if controller.accept(err) || hit_min {
             s = candidate;
-            t += h;
+            t += h_signed;
             if (t_end - t).abs() <= tol_eps {
                 t = t_end;
             }
@@ -704,23 +1244,22 @@ pub fn propagate_adaptive_with_controller(
             traj.t.push(t);
             traj.states.push(s);
 
-            // Apply a burn if this step landed exactly on its epoch.
-            if forward {
-                while let Some(&nb) = burn_times.get(next_burn) {
-                    if t >= nb - tol_eps {
-                        for b in &config.burns {
-                            if (b.t - nb).abs() <= tol_eps {
-                                s.v = s.v.add(b.dv);
-                            }
-                        }
-                        if let Some(last) = traj.states.last_mut() {
-                            *last = s;
-                        }
-                        next_burn += 1;
-                    } else {
-                        break;
-                    }
+            // Apply burns whose epoch this accepted step reached, in either
+            // direction.
+            while let Some(&nb) = burn_times.get(next_burn) {
+                let reached = if forward {
+                    t >= nb - tol_eps
+                } else {
+                    t <= nb + tol_eps
+                };
+                if !reached {
+                    break;
                 }
+                s.v = s.v.add(system.burn_dv_at(nb, tol_eps));
+                if let Some(last) = traj.states.last_mut() {
+                    *last = s;
+                }
+                next_burn += 1;
             }
         } else {
             traj.rejected += 1;
@@ -966,5 +1505,390 @@ mod burn_tests {
             (v_burn - v_none).abs() > 5.0,
             "burn did not affect velocity"
         );
+    }
+
+    #[test]
+    fn burn_cap_matches_cuda() {
+        let mut cfg = Config {
+            burns: (0..MAX_BURNS)
+                .map(|i| Burn {
+                    t: i as f64,
+                    dv: Vec3::new(0.0, 0.0, 0.0),
+                })
+                .collect(),
+            ..Config::default()
+        };
+        assert!(cfg.validate().is_ok());
+
+        cfg.burns.push(Burn {
+            t: 9.0,
+            dv: Vec3::ZERO,
+        });
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::TooManyBurns {
+                count: 9,
+                max: MAX_BURNS
+            })
+        ));
+    }
+
+    #[test]
+    fn adaptive_applies_burn_on_backward_arc() {
+        let cfg = Config {
+            moon_distance: 0.0,
+            mu_moon: 0.0,
+            epoch: 1_000.0,
+            ..Config::default()
+        };
+
+        let r0 = 7.0e6;
+        let v0 = (cfg.mu_earth / r0).sqrt();
+        let state = State {
+            r: Vec3::new(r0, 0.0, 0.0),
+            v: Vec3::new(0.0, v0, 0.0),
+        };
+
+        let mut burned = cfg.clone();
+        burned.burns.push(Burn {
+            t: 400.0,
+            dv: Vec3::new(0.0, 5.0, 0.0),
+        });
+
+        let coast = propagate_adaptive_detailed(state, 0.0, 60.0, 1e-10, &cfg);
+        let with_burn = propagate_adaptive_detailed(state, 0.0, 60.0, 1e-10, &burned);
+
+        assert_eq!(coast.t.last().copied(), Some(0.0));
+        assert_eq!(with_burn.t.last().copied(), Some(0.0));
+        let dv = with_burn.last().v.y - coast.last().v.y;
+        assert!(
+            (dv - 5.0).abs() < 0.5,
+            "backward burn delta-v {dv}, expected ~5"
+        );
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_valid() {
+        assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn constants_match_cuda_kernel() {
+        // These are the literals in src/kernels/multibody_solver.cuh.  If one
+        // side changes, this test forces the other side to follow.
+        assert_eq!(K_MU_EARTH, 3.986004418e14);
+        assert_eq!(K_MU_MOON, 4.9048695e12);
+        assert_eq!(K_EARTH_RADIUS, 6.378137e6);
+        assert_eq!(K_EARTH_J2, 1.08262668e-3);
+        assert_eq!(K_EARTH_MOON_DISTANCE, 3.844e8);
+        assert_eq!(K_MOON_PERIOD, 2.3605915e6);
+        assert_eq!(MAX_BURNS, 8);
+    }
+
+    #[test]
+    fn rejects_invalid_fields_like_cuda() {
+        let cfg = Config {
+            dt: 0.0,
+            ..Config::default()
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange { field: "dt", .. })
+        ));
+
+        let cfg = Config {
+            epoch: f64::NAN,
+            ..Config::default()
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::NotFinite("epoch"))
+        ));
+
+        let cfg = Config {
+            mu_earth: -1.0,
+            ..Config::default()
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange {
+                field: "mu_earth",
+                ..
+            })
+        ));
+
+        let cfg = Config {
+            moon_distance: 1.0,
+            ..Config::default()
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfRange {
+                field: "moon_distance",
+                ..
+            })
+        ));
+
+        let cfg = Config {
+            perturbation: 2,
+            ..Config::default()
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::UnsupportedPerturbation(2))
+        ));
+
+        let cfg = Config {
+            burns: vec![Burn {
+                t: f64::INFINITY,
+                dv: Vec3::ZERO,
+            }],
+            ..Config::default()
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::NotFinite("burn.t"))
+        ));
+    }
+
+    #[test]
+    fn negative_step_count_yields_initial_state_only() {
+        let cfg = Config::default();
+        let state = State {
+            r: Vec3::new(7.0e6, 0.0, 0.0),
+            v: Vec3::new(0.0, 7.5e3, 0.0),
+        };
+        let traj = propagate(state, -5i32, 60.0, &cfg);
+        assert_eq!(traj.len(), 1);
+        assert_eq!(traj[0], state);
+    }
+
+    #[test]
+    fn rust_matches_cuda_two_body_fixture() {
+        // Same fixture and thresholds as tests/test_multibody.cpp.
+        let cfg = Config {
+            dt: 60.0,
+            perturbation: 0,
+            softening: 0.0,
+            moon_distance: 0.0,
+            ..Config::default()
+        };
+
+        let r0 = 7.0e6;
+        let v0 = (cfg.mu_earth / r0).sqrt();
+        let state = State {
+            r: Vec3::new(r0, 0.0, 0.0),
+            v: Vec3::new(0.0, v0, 0.0),
+        };
+        let period = 2.0 * PI * (r0 * r0 * r0 / cfg.mu_earth).sqrt();
+        let steps = (period / cfg.dt) as usize;
+
+        let traj = propagate(state, steps, cfg.dt, &cfg);
+        let last = traj.last().unwrap();
+
+        let radius_error = (last.r.norm() - r0).abs();
+        assert!(radius_error < 10.0, "radius error {radius_error} m");
+
+        let energy = |st: &State| 0.5 * st.v.dot(st.v) - cfg.mu_earth / st.r.norm();
+        let drift = (energy(last) - energy(&state)).abs() / energy(&state).abs();
+        assert!(drift < 5e-6, "energy drift {drift}");
+    }
+}
+
+#[cfg(test)]
+mod ephemeris_tests {
+    use super::*;
+
+    fn two_body_config() -> Config {
+        Config {
+            moon_distance: 0.0,
+            mu_moon: 0.0,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn analytic_ephemeris_matches_the_free_function() {
+        let cfg = Config::default();
+        for &t in &[0.0, 123.0, 86_400.0, -4_000.0] {
+            let (earth, moon) = earth_moon_positions(t, &cfg);
+            let bodies = AnalyticEphemeris.positions(t, &cfg);
+            assert_eq!(bodies.earth, earth);
+            assert_eq!(bodies.moon, Some(moon));
+            assert_eq!(bodies.sun, None);
+            assert_eq!(AnalyticEphemeris.span(), None);
+        }
+    }
+
+    #[test]
+    fn disabling_the_moon_removes_the_body_from_the_field() {
+        let mut cfg = Config::default();
+        assert!(AnalyticEphemeris.positions(0.0, &cfg).moon.is_some());
+        cfg.moon_distance = 0.0;
+        assert!(AnalyticEphemeris.positions(0.0, &cfg).moon.is_none());
+    }
+
+    #[test]
+    fn tabulated_ephemeris_interpolates_linearly() {
+        let sample = |t: f64| EphemerisSample {
+            t,
+            earth: Vec3::new(t, 2.0 * t, -t),
+            moon: Vec3::new(3.0 * t, 4.0, 5.0),
+            sun: None,
+        };
+        let table = TabulatedEphemeris::new(vec![sample(0.0), sample(10.0)]).unwrap();
+        assert_eq!(table.len(), 2);
+        assert!(!table.is_empty());
+        assert!(!table.has_sun());
+        assert_eq!(table.time_span(), (0.0, 10.0));
+        assert!(table.covers(0.0, 10.0));
+        assert!(table.covers(10.0, 2.5));
+        assert!(!table.covers(-1.0, 5.0));
+        assert!(!table.covers(5.0, 11.0));
+        assert!(matches!(
+            table.check_span(-1.0, 5.0),
+            Err(EphemerisError::OutOfRange { .. })
+        ));
+
+        let cfg = Config::default();
+        let bodies = table.positions(2.5, &cfg);
+        assert!((bodies.earth.x - 2.5).abs() < 1e-12);
+        assert!((bodies.earth.y - 5.0).abs() < 1e-12);
+        let moon = bodies.moon.unwrap();
+        assert!((moon.x - 7.5).abs() < 1e-12);
+        assert!((moon.y - 4.0).abs() < 1e-12);
+        assert_eq!(bodies.sun, None);
+
+        // Outside the span the nearest sample is clamped.
+        assert_eq!(table.positions(-5.0, &cfg).earth, sample(0.0).earth);
+        assert_eq!(table.positions(50.0, &cfg).earth, sample(10.0).earth);
+    }
+
+    #[test]
+    fn tabulated_ephemeris_rejects_bad_tables() {
+        assert!(matches!(
+            TabulatedEphemeris::new(Vec::new()),
+            Err(EphemerisError::Empty)
+        ));
+
+        let sample = |t: f64| EphemerisSample {
+            t,
+            earth: Vec3::ZERO,
+            moon: Vec3::ZERO,
+            sun: None,
+        };
+        assert!(matches!(
+            TabulatedEphemeris::new(vec![sample(10.0), sample(5.0)]),
+            Err(EphemerisError::NotSorted { index: 1 })
+        ));
+        assert!(matches!(
+            TabulatedEphemeris::new(vec![sample(f64::NAN)]),
+            Err(EphemerisError::NonFinite { index: 0 })
+        ));
+
+        let mut first = sample(0.0);
+        first.sun = Some(Vec3::new(1.0, 0.0, 0.0));
+        assert!(matches!(
+            TabulatedEphemeris::new(vec![first, sample(1.0)]),
+            Err(EphemerisError::InconsistentSun { index: 1 })
+        ));
+    }
+
+    #[test]
+    fn tabulated_ephemeris_reproduces_the_analytic_trajectory() {
+        let cfg = Config::default();
+        let state = State {
+            r: Vec3::new(6.6e6, 0.0, 0.0),
+            v: Vec3::new(0.0, 7.5e3, 0.0),
+        };
+        let samples = (0..=720)
+            .map(|i| {
+                let t = i as f64 * 10.0;
+                let (earth, moon) = earth_moon_positions(t, &cfg);
+                EphemerisSample {
+                    t,
+                    earth,
+                    moon,
+                    sun: None,
+                }
+            })
+            .collect();
+        let table = TabulatedEphemeris::new(samples).unwrap();
+
+        let analytic = propagate(state, 720, 10.0, &cfg);
+        let tabulated = propagate_with(state, 720, 10.0, &cfg, &table);
+        let diff = analytic
+            .last()
+            .unwrap()
+            .r
+            .sub(tabulated.last().unwrap().r)
+            .norm();
+        assert!(diff < 1e-6, "tabulated/analytic divergence {diff} m");
+    }
+
+    #[test]
+    fn sun_term_is_opt_in() {
+        let cfg = Config {
+            mu_earth: 0.0,
+            mu_moon: 0.0,
+            mu_sun: K_MU_SUN,
+            ..Config::default()
+        };
+
+        let table = TabulatedEphemeris::new(vec![EphemerisSample {
+            t: 0.0,
+            earth: Vec3::ZERO,
+            moon: Vec3::ZERO,
+            sun: Some(Vec3::new(1.5e11, 0.0, 0.0)),
+        }])
+        .unwrap();
+        assert!(table.has_sun());
+
+        let r = Vec3::new(1.5e11 + 1.0e9, 0.0, 0.0);
+        let a = acceleration_with(r, &cfg, 0.0, &table);
+        let expected = -K_MU_SUN / 1.0e18;
+        assert!(
+            (a.x - expected).abs() / expected.abs() < 1e-12,
+            "sun acceleration {}, expected {expected}",
+            a.x
+        );
+        assert_eq!(a.y, 0.0);
+        assert_eq!(a.z, 0.0);
+
+        // With the default solar parameter the third body contributes nothing.
+        let no_sun = Config {
+            mu_earth: 0.0,
+            mu_moon: 0.0,
+            ..Config::default()
+        };
+        assert_eq!(acceleration_with(r, &no_sun, 0.0, &table), Vec3::ZERO);
+    }
+
+    #[test]
+    fn adaptive_integrates_backwards_to_the_start_epoch() {
+        let cfg = two_body_config();
+        let r0 = 7.0e6;
+        let v0 = (cfg.mu_earth / r0).sqrt();
+        let start = State {
+            r: Vec3::new(r0, 0.0, 0.0),
+            v: Vec3::new(0.0, v0, 0.0),
+        };
+        let period = 2.0 * PI * (r0.powi(3) / cfg.mu_earth).sqrt();
+
+        let forward = propagate_adaptive_detailed(start, period, 60.0, 1e-10, &cfg);
+        let s_period = *forward.last();
+
+        let mut back_cfg = cfg.clone();
+        back_cfg.epoch = period;
+        let backward = propagate_adaptive_detailed(s_period, 0.0, 60.0, 1e-10, &back_cfg);
+
+        assert_eq!(backward.t.last().copied(), Some(0.0));
+        let closure = backward.last().r.sub(start.r).norm();
+        assert!(closure < 1.0e3, "backward closure error {closure} m");
     }
 }

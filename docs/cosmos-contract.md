@@ -165,12 +165,13 @@ t,x,y,z,vx,vy,vz
 | `observer` | Third-person camera parked at a fixed external vantage point (`--observer-offset`, km, from the Earth-Moon barycenter) and pointed at the spacecraft. All poses share that fixed camera translation; the per-frame `ΔT` therefore encodes the rotation that keeps the spacecraft centred, and absolute spacecraft positions are recorded in `spacecraft_positions_km`. |
 | `data` | Request measured attitude. The canonical CSV has none, so the Rust builder falls back to Earth pointing and records that in `pointing_note`. |
 
-Positions come from `dynamics::earth_moon_positions(t, config)`; no SPICE
-kernel is read by this pipeline. The camera uses the OpenCV convention Cosmos
-expects: `+Z` forward (optical axis), `+X` right, `+Y` down. The pose rotation
-matrix has those camera axes as its columns in the inertial frame. Every result
-must carry its pointing law; a synthetic attitude must never be presented as
-measured.
+Positions come from `dynamics::earth_moon_positions(t, config)` by default; a
+caller with real data can pass a `dynamics::TabulatedEphemeris` instead. No
+SPICE kernel is read by this pipeline. The camera uses the OpenCV convention
+Cosmos expects: `+Z` forward (optical axis), `+X` right, `+Y` down. The pose
+rotation matrix has those camera axes as its columns in the inertial frame.
+Every result must carry its pointing law; a synthetic attitude must never be
+presented as measured.
 
 When `pointing_law` is `observer`, the manifest also carries an `observer`
 object (`origin`, `offset_km`, `camera_position_km`) and a
