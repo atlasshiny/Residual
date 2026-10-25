@@ -9,6 +9,8 @@ from typing import Any
 
 __all__ = [
     "build_xy",
+    "burn_keep_mask",
+    "apply_burn_mask",
     "load_residual_table",
     "resolve_time_column",
     "resolve_times",
@@ -269,3 +271,50 @@ def split_xy(X, Y, test_fraction=0.2, seed=0):
     Y_train = [Y[i] for i in train_idx]
     Y_test = [Y[i] for i in test_idx]
     return X_train, X_test, Y_train, Y_test
+
+
+def burn_keep_mask(times, burns):
+    """Return a boolean mask indicating which samples to keep (True) vs mask (False).
+
+    A sample at time ``t`` is masked (False) if it falls within any burn window
+    ``[start_s, end_s)`` (half-open interval).  Samples outside all burn windows
+    are kept (True).
+
+    Parameters
+    ----------
+    times : list of float
+        Sample times.
+    burns : list of dict
+        Each dict must have ``start_s`` and ``end_s`` keys (or ``start``/``end``
+        aliases).
+
+    Returns
+    -------
+    list of bool
+        ``True`` for samples to keep, ``False`` for samples inside a burn window.
+    """
+    keep = []
+    for t in times:
+        masked = False
+        for burn in burns:
+            start = float(burn.get("start_s", burn.get("start", 0.0)))
+            end = float(burn.get("end_s", burn.get("end", 0.0)))
+            if start <= t < end:
+                masked = True
+                break
+        keep.append(not masked)
+    return keep
+
+
+def apply_burn_mask(X, Y, times, burns):
+    """Apply a burn mask to ``X``, ``Y``, and ``times``.
+
+    Returns ``(X_keep, Y_keep, t_keep, masked_fraction, masked_count)``.
+    """
+    keep = burn_keep_mask(times, burns)
+    X_keep = [x for x, k in zip(X, keep) if k]
+    Y_keep = [y for y, k in zip(Y, keep) if k]
+    t_keep = [t for t, k in zip(times, keep) if k]
+    masked_count = sum(1 for k in keep if not k)
+    masked_fraction = masked_count / len(keep) if keep else 0.0
+    return X_keep, Y_keep, t_keep, masked_fraction, masked_count

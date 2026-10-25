@@ -9,9 +9,10 @@ from .baselines import (
     sindy_predict,
 )
 from .baselines import mse as baseline_mse
+from .dataset import apply_burn_mask, burn_keep_mask
 from .pinn import PINN, train_pinn
 from .kan import KAN, KANLayer, PolynomialFit, export_results, mse, r2_score, train
-from .run import apply_burn_mask, build_parser, burn_keep_mask, run
+from .run import build_parser, run
 
 __all__ = [
     "KAN",
@@ -31,7 +32,7 @@ __all__ = [
     "sindy_predict",
     "train",
     "apply_burn_mask",
-    "build_parser",
     "burn_keep_mask",
+    "build_parser",
     "run",
 ]
