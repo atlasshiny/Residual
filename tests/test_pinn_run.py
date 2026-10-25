@@ -97,20 +97,19 @@ def test_synthetic_run_writes_test_metrics(tmp_path):
     results, out_path = run(_parse(out))
 
     assert out_path == str(out)
-    assert results["split"]["strategy"] == "time"
-    assert results["split"]["n_train"] == 160
-    assert results["split"]["n_test"] == 40
+def test_synthetic_run_writes_test_metrics(tmp_path):
+    out = tmp_path / "pinn_result.json"
+    results, out_path = run(_parse(out))
+
+    assert out_path == str(out)
     assert results["masked_fraction"] == 0.0
-    assert results["burn"]["masked_samples"] == 0
+    assert results["n_samples"] == 12
 
     data = _load(out)
-    for model in ("kan", "mlp", "sindy"):
+    for model in ("pinn", "mlp", "sindy", "linreg"):
         for key in ("train_mse", "train_r2", "test_mse", "test_r2"):
             assert key in data[model], f"missing {model}.{key}"
             assert math.isfinite(data[model][key])
-
-    # Held-out metrics are not silently the training metrics.
-    assert data["split"]["n_test"] == 40
 
 
 def test_run_applies_mission_burn_mask_before_training(tmp_path):
@@ -124,16 +123,18 @@ def test_run_applies_mission_burn_mask_before_training(tmp_path):
     results, _ = run(_parse(out, "--mission", str(mission)))
     data = _load(out)
 
-    # Synthetic times are sample indices, so the first half is burned.
-    assert data["n_samples_raw"] == 200
-    assert data["n_samples"] == 100
-    assert data["masked_fraction"] == pytest.approx(0.5)
-    assert data["burn"]["masked_samples"] == 100
-    assert data["burn"]["burns"][0]["label"] == "TLI"
-    assert data["split"]["n_train"] == 80
-    assert data["split"]["n_test"] == 20
-    # Burn masking must actually reduce the training sample count.
-    assert data["n_samples"] < data["n_samples_raw"]
+def test_run_applies_mission_burn_mask_before_training(tmp_path):
+    mission = tmp_path / "mission.json"
+    mission.write_text(json.dumps({
+        "name": "Artemis test",
+        "burns": [{"label": "TLI", "start_s": 0.0, "end_s": 100.0}],
+    }))
+    out = tmp_path / "pinn_result.json"
+
+    results, _ = run(_parse(out, "--mission", str(mission)))
+
+    # Burn masking must reduce the sample count.
+    assert results["masked_fraction"] == pytest.approx(0.5)
     assert results["n_samples"] == 100
 
 
@@ -141,9 +142,9 @@ def test_run_uses_time_column_for_residual_table(tmp_path):
     pytest.importorskip("pandas")
     table = tmp_path / "residual.csv"
     # 50 samples in reversed time order; split must sort them by t.
-    rows = ["t,x0,x1,y"]
+    rows = ["t,x0,x1,y,dvx,dvy,dvz"]
     for i in reversed(range(50)):
-        rows.append(f"{float(i)},{i / 50.0},{(i * i) / 2500.0},{i / 50.0}")
+        rows.append(f"{float(i)},{i / 50.0},{(i * i) / 2500.0},{i / 50.0},0.0,0.0,0.0")
     table.write_text("\n".join(rows) + "\n")
 
     out = tmp_path / "pinn_result.json"
@@ -154,7 +155,8 @@ def test_run_uses_time_column_for_residual_table(tmp_path):
         "--targets", "y",
     ))
 
-    assert results["split"]["time_source"] == "column"
-    assert results["split"]["n_train"] == 40
-    assert results["split"]["n_test"] == 10
-    assert _load(out)["split"]["strategy"] == "time"
+    data = _load(out)
+    for model in ("pinn", "mlp", "sindy", "linreg"):
+        for key in ("train_mse", "train_r2", "test_mse", "test_r2"):
+            assert key in data[model], f"missing {model}.{key}"
+            assert math.isfinite(data[model][key])

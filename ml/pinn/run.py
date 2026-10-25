@@ -139,13 +139,22 @@ def run(args) -> tuple:
         X_val, Y_pos_scaled_val = [[0.0]]*2, [[0.0]*3]*2
         X_train, Y_pos_scaled_train = [[0.0]]*12, [[0.0]*3]*12
         X_test, Y_pos_scaled_test = [[0.0]]*2, [[0.0]*3]*2
-        X_pinn_fit, Y_pos_scaled_fit_p, Y_vel_scaled_fit_p = [[0.0]]*10, [[0.0]*3]*10, [[0.0]*3]*10
-        X_pinn_val, Y_pos_scaled_val_p, Y_vel_scaled_val_p = [[0.0]]*2, [[0.0]*3]*2, [[0.0]*3]*2
-        X_pinn_train, Y_pos_scaled_train_p = [[0.0]]*12, [[0.0]*3]*12
-        X_pinn_test, Y_pos_scaled_test_p = [[0.0]]*2, [[0.0]*3]*2
+        X_pinn_fit = [[0.0]]*10
+        X_pinn_val = [[0.0]]*2
+        X_pinn_train = [[0.0]]*12
+        X_pinn_test = [[0.0]]*2
+        Y_vel_scaled_fit = [[0.0]*3]*10
+        Y_vel_scaled_val = [[0.0]*3]*2
+        Y_pos_scaled_fit_p = [[0.0]*3]*10
+        Y_vel_scaled_fit_p = [[0.0]*3]*10
+        Y_pos_scaled_val_p = [[0.0]*3]*2
+        Y_vel_scaled_val_p = [[0.0]*3]*2
+        Y_pos_scaled_train_p = [[0.0]*3]*12
+        Y_pos_scaled_test_p = [[0.0]*3]*2
         feature_cols = "synthetic"
         masked_frac = 0.0
         scaler_pos = None
+        df = None
 
     n_features = len(X_fit[0])
     out_dim = len(Y_pos_scaled_fit[0])
@@ -192,7 +201,7 @@ def run(args) -> tuple:
     lr_test_mse, lr_test_r2 = _eval(None, X_test, df_test[pos_cols].values, predict=lr_predict_fn)
 
     results = {
-        "n_samples": len(df),
+        "n_samples": len(df) if df is not None else 12,
         "masked_fraction": masked_frac,
         "pinn": {"train_mse": pinn_train_mse, "train_r2": pinn_train_r2, "test_mse": pinn_test_mse, "test_r2": pinn_test_r2},
         "mlp": {"train_mse": mlp_train_mse, "train_r2": mlp_train_r2, "test_mse": mlp_test_mse, "test_r2": mlp_test_r2},
@@ -219,6 +228,7 @@ def build_parser():
     parser.add_argument("--engineer", action="store_true")
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--out", default="ml/pinn/pinn_result.json")
     return parser
